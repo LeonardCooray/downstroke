@@ -69,7 +69,7 @@ public final class VoiceMixer: @unchecked Sendable {
     private let targetGain = Atomic<UInt32>(Float(1).bitPattern)
     private let sampleRateBits = Atomic<UInt64>(Double(48000).bitPattern)
     private let latencies = DoubleRing(capacity: 1024)
-    private var retired: [(bank: SampleBank, deadline: Double, cycle: Int)] = []
+    private var retired: [(bank: SampleBank, deadline: Double, deadlineCycle: Int?)] = []
 
     public init(queue: TriggerQueue, maxVoices: Int = 48) {
         precondition(maxVoices > 0)
@@ -93,19 +93,22 @@ public final class VoiceMixer: @unchecked Sendable {
     /// Voices sounding at the end of the last render.
     public var activeVoices: Int { activeCount.load(ordering: .relaxed) }
 
+    /// Clamped to 0...4; non-finite values are ignored.
     public func setMasterGain(_ g: Float) {
-        targetGain.store(max(0, g).bitPattern, ordering: .relaxed)
+        guard g.isFinite else { return }
+        targetGain.store(min(max(g, 0), 4).bitPattern, ordering: .relaxed)
     }
 
-    /// Only changes time constants; clips must already be at this rate.
+    /// Only changes time constants; clips must already be at this rate. Rates outside 8 kHz...768 kHz are ignored.
     public func setSampleRate(_ sr: Double) {
+        guard sr.isFinite, (8000...768_000).contains(sr) else { return }
         sampleRateBits.store(sr.bitPattern, ordering: .relaxed)
     }
 
     /// Render thread only. Overwrites `frames` samples of each output buffer.
     public func render(frames: Int, hostTime: Double, left: UnsafeMutablePointer<Float>, right: UnsafeMutablePointer<Float>) {
         let sampleRate = Double(bitPattern: sampleRateBits.load(ordering: .relaxed))
-        if sampleRate != state.pointee.sampleRate, sampleRate > 0 {
+        if sampleRate != state.pointee.sampleRate {
             state.pointee.sampleRate = sampleRate
             state.pointee.rampLength = max(1, Int((0.010 * sampleRate).rounded()))
             state.pointee.releaseCoefficient = Float(exp(-1 / (0.050 * sampleRate)))
@@ -136,19 +139,23 @@ public final class VoiceMixer: @unchecked Sendable {
         while let value = latencies.pop() { values.append(value) }
     }
 
-    /// Main thread. Keeps `bank` alive until the deadline passes and no voice or queued trigger can still read it.
+    /// Main thread. Producers must not push for `bank` later than `seconds` after swapping it out.
     public func retire(_ bank: SampleBank, after seconds: Double = 2) {
-        retired.append((bank, MonotonicClock.now() + seconds, cycles.load(ordering: .acquiring)))
+        retired.append((bank, MonotonicClock.now() + seconds, nil))
         collectRetired(now: MonotonicClock.now())
     }
 
-    /// Main thread. Frees retired banks that are past their deadline and unused.
+    /// Main thread. Frees retired banks past their deadline that no voice or queued trigger can still read.
     public func collectRetired(now: Double) {
         guard !retired.isEmpty else { return }
-        // Two finished renders since retiring means every trigger queued before then has been popped.
         let cycle = cycles.load(ordering: .acquiring)
+        for i in retired.indices where retired[i].deadlineCycle == nil && now >= retired[i].deadline {
+            retired[i].deadlineCycle = cycle
+        }
+        // Two finished renders after the deadline means everything pushed before it has been popped.
         retired.removeAll { entry in
-            now >= entry.deadline && cycle &- entry.cycle >= 2 && !tagInUse(entry.bank.tag)
+            guard let marked = entry.deadlineCycle else { return false }
+            return cycle &- marked >= 2 && !tagInUse(entry.bank.tag)
         }
     }
 
@@ -157,7 +164,8 @@ public final class VoiceMixer: @unchecked Sendable {
     }
 
     private func start(_ trigger: Trigger, hostTime: Double) {
-        guard trigger.clip.frames > 0, trigger.rate > 0, trigger.rate.isFinite else { return }
+        guard trigger.clip.frames > 0, trigger.rate > 0, trigger.rate.isFinite,
+              trigger.gain.isFinite, trigger.pan.isFinite else { return }
         var slot = -1, oldest = 0
         for v in 0..<maxVoices {
             if voices[v].clip == nil { slot = v; break }
@@ -184,6 +192,7 @@ public final class VoiceMixer: @unchecked Sendable {
         var position = voices[v].position
         var i = 0
         if let sourceRight = clip.right {
+            // Stereo keeps the mono pan law so mono and stereo packs match at centre.
             while i < frames {
                 let index = Int(position)
                 if index >= n { break }
@@ -229,6 +238,9 @@ public final class VoiceMixer: @unchecked Sendable {
                 s.gain = s.rampRemaining == 0 ? s.rampTarget : s.gain + s.rampStep
             }
             var l = left[i] * s.gain, r = right[i] * s.gain
+            if !l.isFinite { l = 0 }
+            if !r.isFinite { r = 0 }
+            if !s.envelope.isFinite { s.envelope = 0 }
             s.envelope = max(max(abs(l), abs(r)), s.envelope * s.releaseCoefficient)
             if s.envelope > 1 {
                 let g = 1 / s.envelope

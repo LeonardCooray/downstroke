@@ -158,7 +158,15 @@ private func makeBank() throws -> (SampleBank, URL) {
     defer { if let dir { try? FileManager.default.removeItem(at: dir) } }
     #expect(weakBank != nil)
     #expect(mixer.activeVoices == 1)
-    // Past the deadline but the voice still plays.
+    for _ in 0..<3 { render(mixer, out) }
+    // Renders have passed but the deadline hasn't.
+    mixer.collectRetired(now: t0)
+    #expect(weakBank != nil)
+    mixer.collectRetired(now: t0 + 10)
+    #expect(weakBank != nil)
+    for _ in 0..<3 { render(mixer, out) }
+    // Deadline and render cycles both satisfied; only the sounding voice keeps it.
+    #expect(mixer.activeVoices == 1)
     mixer.collectRetired(now: t0 + 10)
     #expect(weakBank != nil)
     var blocks = 0
@@ -167,9 +175,6 @@ private func makeBank() throws -> (SampleBank, URL) {
         blocks += 1
     }
     #expect(mixer.activeVoices == 0)
-    // Voice gone but the deadline hasn't passed.
-    mixer.collectRetired(now: t0)
-    #expect(weakBank != nil)
     mixer.collectRetired(now: t0 + 10)
     #expect(weakBank == nil)
 }
@@ -199,20 +204,95 @@ private func makeBank() throws -> (SampleBank, URL) {
     #expect(weakBank == nil)
 }
 
+@Test func latePushWhilePausedKeepsBankAlive() throws {
+    let queue = TriggerQueue(), mixer = VoiceMixer(queue: queue), out = Output()
+    weak var weakBank: SampleBank?
+    let t0 = MonotonicClock.now()
+    var dir: URL?
+    do {
+        let (bank, folder) = try makeBank()
+        dir = folder
+        weakBank = bank
+        mixer.retire(bank, after: 0.05)
+        render(mixer, out)
+        render(mixer, out)
+        // A producer that read the old bank just before the swap pushes late, then the engine pauses.
+        let clip = try #require(bank.presses(.alpha, .hard).first)
+        #expect(queue.push(trigger(clip, tag: bank.tag)))
+    }
+    defer { if let dir { try? FileManager.default.removeItem(at: dir) } }
+    mixer.collectRetired(now: t0 + 10)
+    mixer.collectRetired(now: t0 + 20)
+    #expect(weakBank != nil)
+    render(mixer, out)
+    #expect(mixer.activeVoices == 1)
+    mixer.collectRetired(now: t0 + 20)
+    #expect(weakBank != nil)
+    var blocks = 0
+    while mixer.activeVoices > 0, blocks < 1000 {
+        render(mixer, out)
+        blocks += 1
+    }
+    mixer.collectRetired(now: t0 + 20)
+    #expect(weakBank == nil)
+}
+
+@Test func nonFiniteSamplesAndTriggersStayOut() {
+    var samples = [Float](repeating: 0.5, count: 256)
+    samples[1] = .infinity
+    samples[2] = .nan
+    let clip = makeClip(samples)
+    let steady = makeClip([Float](repeating: 0.25, count: 256))
+    defer { freeClip(clip); freeClip(steady) }
+    let queue = TriggerQueue(), mixer = VoiceMixer(queue: queue), out = Output()
+    #expect(queue.push(trigger(clip, pan: -1)))
+    #expect(queue.push(trigger(steady, gain: .nan, pan: 1)))
+    #expect(queue.push(trigger(steady, gain: .infinity, pan: 1)))
+    #expect(queue.push(trigger(steady, pan: .nan)))
+    render(mixer, out)
+    #expect(mixer.activeVoices == 1)
+    #expect((out.l + out.r).allSatisfy { $0.isFinite && abs($0) <= 1 })
+    // Normal output resumes right after the bad samples.
+    #expect(out.l[3...].allSatisfy { abs($0 - 0.5) < 1e-5 })
+    #expect(out.r.allSatisfy { abs($0) < 1e-6 })
+}
+
+@Test func nonFiniteSettingsAreIgnored() {
+    let clip = makeClip([Float](repeating: 0.5, count: 4800))
+    defer { freeClip(clip) }
+    let queue = TriggerQueue(), mixer = VoiceMixer(queue: queue), out = Output()
+    mixer.setMasterGain(.infinity)
+    mixer.setMasterGain(.nan)
+    mixer.setSampleRate(0)
+    mixer.setSampleRate(.nan)
+    mixer.setSampleRate(.infinity)
+    #expect(queue.push(trigger(clip, pan: -1)))
+    render(mixer, out)
+    #expect(out.l.allSatisfy { abs($0 - 0.5) < 1e-5 })
+}
+
 @Test func renderDoesNotAllocate() {
     let clip = makeClip([Float](repeating: 0.01, count: 1_300_000))
     defer { freeClip(clip) }
     let queue = TriggerQueue(), mixer = VoiceMixer(queue: queue), out = Output()
     let left = out.left, right = out.right
     // Other suites allocate in parallel; one quiet attempt is enough, a real leak shows every time.
+    let fresh = (0..<8).map { trigger(clip, pan: Float($0 % 3) - 1, time: Double($0)) }
+    var latencies: [Double] = []
+    latencies.reserveCapacity(4096)
     var deltas: [(blocks: Int, bytes: Int)] = []
     deltas.reserveCapacity(5)
     for _ in 0..<5 {
         for i in 0..<48 { _ = queue.push(trigger(clip, pan: Float(i % 3) - 1, time: Double(i))) }
         mixer.render(frames: blockFrames, hostTime: 1, left: left, right: right)
+        latencies.removeAll(keepingCapacity: true)
+        mixer.drainLatencies(into: &latencies)
         var before = malloc_statistics_t(), after = malloc_statistics_t()
         malloc_zone_statistics(nil, &before)
         for cycle in 0..<10_000 {
+            // Fresh voices steal from a full mixer, and the master gain keeps ramping.
+            if cycle % 10 == 0 { for t in fresh { _ = queue.push(t) } }
+            if cycle % 100 == 0 { mixer.setMasterGain(cycle % 200 == 0 ? 0.5 : 1) }
             mixer.render(frames: blockFrames, hostTime: Double(cycle), left: left, right: right)
         }
         malloc_zone_statistics(nil, &after)

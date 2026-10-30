@@ -16,6 +16,7 @@ public final class TypingPipeline: @unchecked Sendable {
         var planner: TriggerPlanner
         // Events waiting for the oldest press's hit window, in arrival order.
         var pending: [KeyEvent] = []
+        var lastVelocity: Float?
     }
 
     private let queue: TriggerQueue
@@ -73,6 +74,12 @@ public final class TypingPipeline: @unchecked Sendable {
         }
     }
 
+    /// True while a press waits for its hit window; drives the fallback tick timer.
+    public var hasPending: Bool { state.withLock { !$0.pending.isEmpty } }
+
+    /// Velocity of the latest played press, nil before the first.
+    public var lastVelocity: Float? { state.withLock { $0.lastVelocity } }
+
     /// Plays a fixed A-key press, ignoring `enabled` and the mute rules.
     public func audition(boardBank: SampleBank) {
         state.withLock { s in
@@ -116,6 +123,7 @@ public final class TypingPipeline: @unchecked Sendable {
 
     private func emit(_ e: KeyEvent, velocity: Float, _ s: inout State) {
         guard let bank = s.bank else { return }
+        if !e.isRelease { s.lastVelocity = velocity }
         for t in s.planner.plan(e, velocity: velocity, bank: bank, settings: s.settings) { _ = queue.push(t) }
     }
 }

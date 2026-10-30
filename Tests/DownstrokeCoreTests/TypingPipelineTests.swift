@@ -200,3 +200,21 @@ private struct Rig {
     }
     group.wait()
 }
+
+@Test func hasPendingTracksWaitingPresses() {
+    let rig = Rig()
+    #expect(!rig.pipeline.hasPending)
+    rig.pipeline.keyEvent(press(at: 1.0), now: 1.0)
+    #expect(rig.pipeline.hasPending)
+    rig.pipeline.tick(now: 1.0121)
+    #expect(!rig.pipeline.hasPending)
+}
+
+@Test func lastVelocityFollowsPlayedPresses() {
+    let rig = Rig(sensorAvailable: false)
+    #expect(rig.pipeline.lastVelocity == nil)
+    rig.pipeline.keyEvent(release(at: 1.0), now: 1.0)
+    #expect(rig.pipeline.lastVelocity == nil)
+    rig.pipeline.keyEvent(press(at: 1.1), now: 1.1)
+    #expect(rig.pipeline.lastVelocity == 0.5)
+}

@@ -32,8 +32,6 @@ final class KeyTap: @unchecked Sendable {
     // Tap-thread confined.
     private var previousFlags: UInt64 = 0
 
-    static let capsLock: UInt16 = 57
-
     static var hasPermission: Bool { CGPreflightListenEventAccess() }
 
     static func requestPermission() { CGRequestListenEventAccess() }
@@ -124,14 +122,9 @@ final class KeyTap: @unchecked Sendable {
         case .flagsChanged:
             let flags = event.flags.rawValue
             defer { previousFlags = flags }
-            let code = Self.keyCode(event)
-            // Caps Lock sends one flagsChanged per physical press and has no device bit.
-            if code == Self.capsLock { return emit(event, isRelease: false, isModifier: true) }
-            let mask = Self.deviceMask(for: code)
-            guard mask != 0 else { return }
-            let isDown = flags & mask != 0
-            guard isDown != (previousFlags & mask != 0) else { return }
-            emit(event, isRelease: !isDown, isModifier: true)
+            guard let isPress = ModifierTransition.isPress(keyCode: Self.keyCode(event), flags: flags,
+                                                           previousFlags: previousFlags) else { return }
+            emit(event, isRelease: !isPress, isModifier: true)
         default:
             break
         }
@@ -146,22 +139,6 @@ final class KeyTap: @unchecked Sendable {
 
     private static func keyCode(_ event: CGEvent) -> UInt16 {
         UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode))
-    }
-
-    /// NX_DEVICE*KEYMASK bits from IOLLEvent.h, so left and right modifiers are told apart.
-    static func deviceMask(for keyCode: UInt16) -> UInt64 {
-        switch keyCode {
-        case 59: 0x0000_0001 // left control
-        case 56: 0x0000_0002 // left shift
-        case 60: 0x0000_0004 // right shift
-        case 55: 0x0000_0008 // left command
-        case 54: 0x0000_0010 // right command
-        case 58: 0x0000_0020 // left option
-        case 61: 0x0000_0040 // right option
-        case 62: 0x0000_2000 // right control
-        case 63: 0x0080_0000 // fn
-        default: 0
-        }
     }
 
     #if DEBUG

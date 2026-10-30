@@ -20,10 +20,21 @@ enum ProbeMode {
 
     static var isRequested: Bool { CommandLine.arguments.contains("--probe") }
 
+    /// A key-down's timestamp and how long after it the tap saw it.
+    private struct Press {
+        var time: Double
+        var lag: Double
+    }
+
     private final class PressQueue: @unchecked Sendable {
-        private let times = Mutex<[Double]>([])
-        func push(_ t: Double) { times.withLock { $0.append(t) } }
-        func drain() -> [Double] { times.withLock { t in defer { t.removeAll() }; return t } }
+        private let presses = Mutex<[Press]>([])
+        func push(_ p: Press) { presses.withLock { $0.append(p) } }
+        func drain() -> [Press] { presses.withLock { p in defer { p.removeAll() }; return p } }
+    }
+
+    private enum Outcome {
+        case peaks([Float])
+        case missed(lastLag: Double)
     }
 
     static func run() -> Never {
@@ -81,11 +92,24 @@ enum ProbeMode {
 
         silenceTerminal()
         let queue = PressQueue()
-        tap.onEvent = { e in if !e.isRelease && !e.isModifier { queue.push(e.time) } }
-        guard let soft = collect("SOFT", queue: queue, ring: ring), let hard = collect("HARD", queue: queue, ring: ring) else {
-            print("sensor: FAILED, stopped delivering samples during the presses")
-            finish(2)
+        tap.onEvent = { e in
+            if !e.isRelease && !e.isModifier { queue.push(Press(time: e.time, lag: MonotonicClock.now() - e.time)) }
         }
+        var sets: [[Float]] = []
+        for label in ["SOFT", "HARD"] {
+            switch collect(label, queue: queue, ring: ring, showLag: sets.isEmpty) {
+            case .peaks(let peaks):
+                sets.append(peaks)
+            case .missed(let lastLag) where sensor.isStreaming:
+                print(String(format: "key tap: FAILED, key times fall outside the sampled window (timebase mismatch? last key event lag %.2f ms)",
+                             lastLag * 1000))
+                finish(2)
+            case .missed:
+                print("sensor: FAILED, stopped delivering samples during the presses")
+                finish(2)
+            }
+        }
+        let soft = sets[0], hard = sets[1]
 
         let softMedian = median(soft)
         let hardMedian = median(hard)
@@ -98,35 +122,45 @@ enum ProbeMode {
         finish(pass ? 0 : 1)
     }
 
-    /// Peak per press; nil if the sensor stops answering.
-    private static func collect(_ label: String, queue: PressQueue, ring: SampleRing) -> [Float]? {
+    /// Peak per press, or `.missed` once a whole set's worth of presses got no peak.
+    private static func collect(_ label: String, queue: PressQueue, ring: SampleRing, showLag: Bool) -> Outcome {
         print("Type \(pressesPerSet) \(label) presses (letter keys; they won't echo here).")
         _ = queue.drain()
-        var pending: [Double] = []
+        var pending: [Press] = []
         var peaks: [Float] = []
         var missed = 0
+        var lastLag = 0.0
         while peaks.count < pressesPerSet {
             pending += queue.drain()
             let now = MonotonicClock.now()
-            pending.removeAll { t in
+            pending.removeAll { press in
                 guard peaks.count < pressesPerSet else { return true }
-                if let p = ImpactAnalyzer.peak(in: ring, keyTime: t) {
+                if let p = ImpactAnalyzer.peak(in: ring, keyTime: press.time) {
+                    if showLag && peaks.isEmpty {
+                        // Expect ~0.1–1 ms; far off means the key timestamps aren't on the sensor's clock.
+                        print(String(format: "  key event lag %.2f ms (tap callback after the event timestamp)", press.lag * 1000))
+                    }
                     peaks.append(p)
                     print(String(format: "\r  %2d/%d  peak %6.2f mg", peaks.count, pressesPerSet, p * 1000), terminator: "")
                     fflush(stdout)
                     return true
                 }
-                if now - t > 0.25 {
+                // abs: a key time on the wrong clock can land in the future and would never expire.
+                if abs(now - press.time) > 0.25 {
                     missed += 1
+                    lastLag = press.lag
                     return true
                 }
                 return false
             }
-            if missed >= pressesPerSet { print(""); return nil }
+            if missed >= pressesPerSet {
+                print("")
+                return .missed(lastLag: lastLag)
+            }
             Thread.sleep(forTimeInterval: 0.005)
         }
         print("")
-        return peaks
+        return .peaks(peaks)
     }
 
     private static func median(_ values: [Float]) -> Float {

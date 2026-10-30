@@ -58,3 +58,24 @@ func rms(_ x: [Float]) -> Double {
 }
 
 func peak(_ x: [Float]) -> Float { x.reduce(0) { max($0, abs($1)) } }
+
+/// One real bank shared by the trigger tests, so each test doesn't decode a board again.
+let sharedBank: SampleBank = {
+    do { return try SampleBank(board: vendoredBoard("holy-panda"), sampleRate: 48000) } catch { fatalError("\(error)") }
+}()
+
+func drain(_ queue: TriggerQueue) -> [Trigger] {
+    var out: [Trigger] = []
+    while let t = queue.pop() { out.append(t) }
+    return out
+}
+
+enum Slot: Equatable { case press(Layer), release, unknown }
+
+/// Which clip list of `bank` a trigger's clip came from, for the given key group.
+func slot(of trigger: Trigger, in bank: SampleBank, group: KeyGroup = .alpha) -> Slot {
+    for layer in Layer.allCases where bank.presses(group, layer).contains(where: { $0.left == trigger.clip.left }) {
+        return .press(layer)
+    }
+    return bank.releases(group).contains { $0.left == trigger.clip.left } ? .release : .unknown
+}

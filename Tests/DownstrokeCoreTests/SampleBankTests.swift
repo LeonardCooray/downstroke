@@ -46,7 +46,8 @@ private let burst = whiteNoise(frames: 2205, amplitude: 0.8)
     let hard = try #require(bank.presses(.alpha, .hard).first)
     let slam = try #require(bank.presses(.alpha, .slam).first)
     #expect(soft.frames == hard.frames && slam.frames == hard.frames)
-    #expect(soft.left != hard.left)
+    let content = { (c: ClipRef) in Array(UnsafeBufferPointer(start: c.left, count: c.frames)) }
+    #expect(rms(content(soft)) < rms(content(hard)))
     #expect(bank.presses(.alpha, .hard).count == 5)
     #expect(bank.boardID == "holy-panda")
 }

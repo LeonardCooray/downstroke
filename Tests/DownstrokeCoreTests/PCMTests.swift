@@ -14,13 +14,15 @@ import Testing
     }
 }
 
-@Test func decodeKeepsStereo() throws {
+@Test func decodeKeepsStereoThroughTheConverter() throws {
     let dir = try makeTempDirectory()
     defer { try? FileManager.default.removeItem(at: dir) }
     let url = dir.appendingPathComponent("s.wav")
     try writeWAV([whiteNoise(frames: 4410, amplitude: 0.5, seed: 1), whiteNoise(frames: 4410, amplitude: 0.25, seed: 2)], to: url)
-    let clip = try AudioDecoder.decode(url, sampleRate: 44100)
-    #expect(clip.frameCount == 4410)
+    let clip = try AudioDecoder.decode(url, sampleRate: 48000)
+    #expect(abs(Double(clip.frameCount) / 4800 - 1) < 0.01)
     let right = try #require(clip.right)
+    #expect(right.count == clip.frameCount)
     #expect(peak(right) < peak(clip.left))
+    #expect(peak(right) > 0.1)
 }

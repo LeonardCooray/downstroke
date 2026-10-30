@@ -63,3 +63,26 @@ private func firstIndexAbove(_ x: [Float], _ threshold: Float) -> Int? { x.first
 @Test func layerCentres() {
     #expect(Layer.allCases.map(\.centre) == [0.125, 0.375, 0.625, 0.875])
 }
+
+private func sine(_ hz: Double, amplitude: Double, seconds: Double = 0.1) -> [Float] {
+    (0..<Int(seconds * rate)).map { Float(amplitude * sin(2 * Double.pi * hz * Double($0) / rate)) }
+}
+
+private func gainDB(_ layer: Layer, hz: Double, amplitude: Double) -> Double {
+    let input = sine(hz, amplitude: amplitude)
+    let output = LayerDerivation.derive(from: PCMClip(left: input), sampleRate: rate)[layer]!.left
+    let back = { (x: [Float]) in rms(Array(x[(x.count / 2)...])) }
+    return 20 * log10(back(output) / back(input))
+}
+
+@Test func softAttenuatesTwelveDBAtCutoff() {
+    #expect(abs(gainDB(.soft, hz: 2800, amplitude: 0.5) - -12.0) < 0.5)
+}
+
+@Test func mediumAttenuatesFivePointFiveDBAtCutoff() {
+    #expect(abs(gainDB(.medium, hz: 6500, amplitude: 0.5) - -5.5) < 0.5)
+}
+
+@Test func slamBoostsLowEndBySixPointNineDB() {
+    #expect(abs(gainDB(.slam, hz: 50, amplitude: 0.05) - 6.9) < 0.5)
+}

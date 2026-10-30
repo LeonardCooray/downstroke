@@ -1,5 +1,7 @@
 import AppKit
 
+if ProbeMode.isRequested { ProbeMode.run() }
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
@@ -12,5 +14,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         menuBar = MenuBarController()
+        #if DEBUG
+        DebugSelfTest.runIfRequested()
+        #endif
     }
 }

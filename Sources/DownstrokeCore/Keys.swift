@@ -74,7 +74,7 @@ public enum KeyClassifier {
         case 54...63: return .modifier
         case 123...126: return .arrow
         case 53: return .escape
-        case 96...101, 103, 105, 106, 107, 109, 111, 113, 118, 120, 122: return .function
+        case 64, 79, 80, 90, 96...101, 103, 105, 106, 107, 109, 111, 113, 118, 120, 122: return .function
         case 10, 24, 27, 30, 33, 39, 41, 42, 43, 44, 47, 50: return .punctuation
         default: return .other
         }
@@ -109,6 +109,8 @@ public enum KeyLayout {
                 left += keyWidth
             }
         }
+        // Up and down arrows share a column.
+        result[126] = result[125]
         return result
     }()
 }

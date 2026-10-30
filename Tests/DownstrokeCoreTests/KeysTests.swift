@@ -81,3 +81,12 @@ private func isPress(_ code: UInt16, _ flags: UInt64, after previous: UInt64) ->
 @Test func twentySixKeysAreAlpha() {
     #expect((UInt16(0)...255).filter { KeyClassifier.group(for: $0) == .alpha }.count == 26)
 }
+
+@Test func arrowsShareColumnsAndSitRight() {
+    for code: UInt16 in [123, 124, 125, 126] { #expect(KeyLayout.position(for: code) > 0.8, "key code \(code)") }
+    #expect(KeyLayout.position(for: 126) == KeyLayout.position(for: 125))
+}
+
+@Test func extendedFunctionKeysAreFunction() {
+    for code: UInt16 in [64, 79, 80, 90] { #expect(KeyClassifier.group(for: code) == .function, "key code \(code)") }
+}

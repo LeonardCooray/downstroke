@@ -4,7 +4,7 @@ A macOS menu bar app that plays mechanical-keyboard sounds as you type. Work in 
 
 ## Credits
 
-Sound packs and licence notices live in `LICENSES/`: Switchcraft (MIT), Mechvibes (MIT), kbsim (MIT), olvvier/apple-silicon-accelerometer (MIT) and freesound CC0 recordings by humi74 and bonesawmgraw.
+Sound packs live in `Resources/SoundPacks/` and licence notices in `LICENSES/`: Switchcraft (MIT), Mechvibes (MIT), kbsim (MIT), olvvier/apple-silicon-accelerometer (MIT) and freesound CC0 recordings by humi74 and bonesawmgraw.
 
 ## Build
 

@@ -25,8 +25,8 @@ cat > LICENSES/freesound-CC0.txt <<'LIC'
 Some of the keyboard recordings used by the Switchcraft packs come from freesound.org
 and are released under Creative Commons Zero (CC0 1.0, public domain dedication):
 
-- humi74 (freesound user 412926)
-- bonesawmgraw (freesound user 572978)
+- "Mechanical keyboard clicking. Different keys" by humi74, https://freesound.org/s/412926/ (CC0 1.0)
+- "Typing Fast_A01" by bonesawmgraw, https://freesound.org/s/572978/ (CC0 1.0)
 
 https://creativecommons.org/publicdomain/zero/1.0/
 LIC

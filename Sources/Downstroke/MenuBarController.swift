@@ -33,7 +33,7 @@ final class MenuBarController: NSObject {
     }
 }
 
-/// Built once at launch and reused; the controls arrive in a later task.
+/// Built once at launch and reused.
 @MainActor
 final class PopoverPanel: NSPanel {
     static let size = NSSize(width: 360, height: 480)

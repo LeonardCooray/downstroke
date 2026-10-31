@@ -212,7 +212,8 @@ enum BenchMode {
         cpuLine("idle CPU, engine running (hit strength off)", idle, budget: 1.0)
         cpuLine("idle CPU, engine + synthetic 800 Hz sensor", syntheticIdle, budget: 1.0)
         if let realIdle, let realSensorOnly {
-            cpuLine(String(format: "idle CPU, engine + real sensor (%.0f Hz)", realRate), realIdle, budget: 1.0)
+            // Ruling: hit strength on has its own idle budget, set from the measured HID floor.
+            cpuLine(String(format: "idle CPU, engine + real sensor (%.0f Hz), hit-strength-on idle budget", realRate), realIdle, budget: 1.5)
             print(String(format: "info idle CPU, real sensor only, engine stopped: %.2f%% of a core (not checked)", realSensorOnly))
         } else {
             print("SKIP idle CPU, engine + real sensor: \(realError ?? "no sensor")")

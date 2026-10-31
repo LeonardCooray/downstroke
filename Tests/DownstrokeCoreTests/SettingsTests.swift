@@ -16,7 +16,7 @@ private func withSuite(_ body: (UserDefaults, String) throws -> Void) rethrows {
         #expect(s.enabled)
         #expect(s.volume == 0.68)
         #expect(s.boardID == "holy-panda")
-        #expect(s.hitStrengthEnabled)
+        #expect(!s.hitStrengthEnabled)
         #expect(s.sensitivity == 0.5)
         #expect(s.keyUpSounds)
         #expect(s.stereoWidth == 0.5)

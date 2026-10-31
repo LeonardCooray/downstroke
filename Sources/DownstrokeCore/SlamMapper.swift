@@ -5,15 +5,19 @@ public struct SlamMapper: Sendable {
     public static let normalVelocity: Float = 0.5
     public static let slamVelocity: Float = 0.875
     public static let bumpThreshold: Float = 0.3
+    // Below ~13 mg ordinary typing starts reading as slams, so the easy half is narrower.
     private static let hardest: Float = 0.030
-    private static let easiest: Float = 0.008
+    private static let middle: Float = 0.0155
+    private static let easiest: Float = 0.013
 
     /// Filtered impact in g where a press starts counting as a slam.
     public let threshold: Float
 
     public init(sensitivity: Float) {
         let s = min(max(sensitivity, 0), 1)
-        threshold = Self.hardest * pow(Self.easiest / Self.hardest, s)
+        threshold = s <= 0.5
+            ? Self.hardest * pow(Self.middle / Self.hardest, 2 * s)
+            : Self.middle * pow(Self.easiest / Self.middle, 2 * s - 1)
     }
 
     public func velocity(forPeak g: Float) -> Float {

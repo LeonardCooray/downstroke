@@ -4,8 +4,10 @@ import Testing
 @Suite struct SlamMapperTests {
     @Test func thresholdFollowsSensitivityOnALogScale() {
         #expect(abs(SlamMapper(sensitivity: 0).threshold - 0.030) < 1e-6)
-        #expect(abs(SlamMapper(sensitivity: 1).threshold - 0.008) < 1e-6)
-        #expect(abs(SlamMapper(sensitivity: 0.5).threshold - 0.01549) < 1e-4)
+        #expect(abs(SlamMapper(sensitivity: 1).threshold - 0.013) < 1e-6)
+        #expect(abs(SlamMapper(sensitivity: 0.25).threshold - (0.030 * 0.0155).squareRoot()) < 1e-5)
+        #expect(abs(SlamMapper(sensitivity: 0.75).threshold - (0.0155 * 0.013).squareRoot()) < 1e-5)
+        #expect(abs(SlamMapper(sensitivity: 0.5).threshold - 0.0155) < 1e-6)
         #expect(SlamMapper(sensitivity: -1).threshold == SlamMapper(sensitivity: 0).threshold)
         #expect(SlamMapper(sensitivity: 2).threshold == SlamMapper(sensitivity: 1).threshold)
     }

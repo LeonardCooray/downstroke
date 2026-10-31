@@ -31,7 +31,7 @@ struct PanelContent: View {
             SectionLabel("Slam accent").padding(.top, 12)
             Group {
                 if state.fixedStrength {
-                    Text("Off")
+                    Text(state.meterNote)
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)

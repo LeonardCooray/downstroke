@@ -35,8 +35,8 @@ A raw-sensor recording on the M5 Pro MacBook Pro showed that the accelerometer c
 - **Below the threshold:** the press plays at today's fixed velocity (0.5), identical to the accent being off.
 - **At or above the threshold (my call):** velocity ramps from 0.5 at the threshold up to full slam (0.875) at 1.5× the threshold, so a borderline press gets a partly heavier sound rather than a hard flip.
 - **Bumps:** peaks over 0.3 g (knocking or lifting the Mac) still play at fixed strength, as today.
-- **Threshold:** the existing Sensitivity slider (saved value kept) maps on a log scale from 30 mg (Low) to 8 mg (High). The default 0.5 lands on about 16 mg, where capture 1 caught 81% of slams and flagged 3% of other presses.
-- **Default (my call, flag for Leonard):** on, matching his "feel over speed" decision. Its cost is the ~8 ms wait on every key and about 0.5% of a core for the sensor. The setting is stored under the same key, so anyone who turned it off keeps it off.
+- **Threshold:** the Sensitivity slider maps on a log scale from 30 mg (Hard to trigger) through 15.5 mg at the default 0.5 to 13 mg (Easy to trigger), where capture 1 caught 81% of slams and flagged 3% of other presses at the default. *Amended at review: the easy end was 8 mg, where about half of ordinary presses read as slams.*
+- **Default (my call, flag for Leonard):** on, matching his "feel over speed" decision. Its cost is the ~8 ms wait on every key and about 0.5% of a core for the sensor. *Amended at review: v1 saved every setting at launch, so a v1 save is migrated once (accent on, slider back to 0.5); after that, turning it off sticks.*
 
 ## UI (my calls)
 

@@ -94,7 +94,7 @@ Downstroke reads the MacBook's built-in accelerometer at about 800 Hz (no root n
 
 Each board has several real recordings of ordinary keys (5 to 26, depending on the pack) and usually one each for keys like space and return. At load, Downstroke derives four velocity layers (soft, medium, hard and slam) from every recording. Normal presses crossfade medium and hard; slams move toward the slam layer, which changes the brightness and weight of the sound, not its pitch or timing. Every press also gets a small random pitch (±3%) and gain (±10%) variation.
 
-**Tuning.** Settings › Sound › Slam threshold runs from Hard to trigger (30 mg) to Easy to trigger (8 mg); the middle is about 15.5 mg. The panel meter puts the threshold at its centre tick, and bars past it light orange, so you can set it by eye. Settings › Diagnostics counts slams since launch.
+**Tuning.** Settings › Sound › Slam threshold runs from Hard to trigger (30 mg) to Easy to trigger (13 mg); the middle is 15.5 mg. The easy end stops at 13 mg because below that ordinary typing starts reading as slams. The panel meter puts the threshold at its centre tick, and bars past it light orange, so you can set it by eye. Settings › Diagnostics counts slams since launch.
 
 **Checking the sensor.** `build/Downstroke.app/Contents/MacOS/Downstroke --probe` (run from a terminal) wakes the accelerometer, then asks for 20 soft presses and 20 slams, and passes when the default threshold catches at least 60% of the slams and at most 10% of the soft presses. Type the presses in another app such as TextEdit: a terminal with Secure Keyboard Entry on hides key presses from the listener.
 

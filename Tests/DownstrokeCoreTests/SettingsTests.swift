@@ -69,7 +69,20 @@ private func withSuite(_ body: (UserDefaults, String) throws -> Void) rethrows {
     withSuite { defaults, _ in
         defaults.set(Data("{}".utf8), forKey: "settings.v1")
         #expect(SettingsStore(defaults: defaults).settings.hitStrengthEnabled)
-        defaults.set(Data(#"{"hitStrengthEnabled":false}"#.utf8), forKey: "settings.v1")
+        defaults.set(Data(#"{"hitStrengthEnabled":false,"slamAccentVersion":1}"#.utf8), forKey: "settings.v1")
+        #expect(!SettingsStore(defaults: defaults).settings.hitStrengthEnabled)
+    }
+}
+
+@Test func v1SavesMigrateToTheSlamAccentOnce() {
+    withSuite { defaults, _ in
+        defaults.set(Data(#"{"hitStrengthEnabled":false,"sensitivity":0.9,"volume":0.3}"#.utf8), forKey: "settings.v1")
+        let store = SettingsStore(defaults: defaults)
+        #expect(store.settings.hitStrengthEnabled)
+        #expect(store.settings.sensitivity == 0.5)
+        #expect(store.settings.volume == 0.3)
+        store.settings.hitStrengthEnabled = false
+        store.save()
         #expect(!SettingsStore(defaults: defaults).settings.hitStrengthEnabled)
     }
 }

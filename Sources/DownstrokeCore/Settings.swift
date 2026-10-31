@@ -12,6 +12,7 @@ public struct DownstrokeSettings: Codable, Equatable, Sendable {
     public var muteWhileMicInUse = true
     public var launchAtLogin = false
     public var hotkey = Hotkey.defaultToggle
+    public var slamAccentVersion = 1
 
     public init() {}
 
@@ -29,6 +30,11 @@ public struct DownstrokeSettings: Codable, Equatable, Sendable {
         muteWhileMicInUse = try c.decodeIfPresent(Bool.self, forKey: .muteWhileMicInUse) ?? muteWhileMicInUse
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? launchAtLogin
         hotkey = try c.decodeIfPresent(Hotkey.self, forKey: .hotkey) ?? hotkey
+        // v1 saved its continuous hit-strength settings; switch them to the slam accent once.
+        if try c.decodeIfPresent(Int.self, forKey: .slamAccentVersion) == nil {
+            hitStrengthEnabled = true
+            sensitivity = 0.5
+        }
     }
 }
 

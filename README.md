@@ -20,16 +20,15 @@ It's built for a MacBook's built-in keyboard. The sound starts about 5 ms after 
 
 ## Install
 
-Downstroke needs macOS 27 and the Xcode Command Line Tools. Full Xcode isn't required. There are no prebuilt releases yet, so build it yourself:
+Downstroke needs macOS 27.
 
-```bash
-scripts/bundle.sh          # release build, signed: build/Downstroke.app
-open build/Downstroke.app
-```
+1. Download the latest `Downstroke-<version>.dmg` from [Releases](https://github.com/LeonardCooray/downstroke/releases/latest).
+2. Open it and drag **Downstroke** into **Applications**.
+3. Open Downstroke from Applications. It appears in the menu bar, not the Dock.
 
-Copy `build/Downstroke.app` wherever you like. Updates come from rebuilding; there's no update check.
+Downstroke is signed with a personal certificate rather than an Apple Developer ID, so macOS blocks the first launch. Click **Done** on that warning, then go to **System Settings › Privacy & Security**, scroll down to **Security** and click **Open Anyway** next to Downstroke. You only need to do this once.
 
-macOS ties the Input Monitoring permission to the app's code signature. `scripts/bundle.sh` signs with a local certificate called `Downstroke Local Signing`; create it once as described in [docs/signing.md](docs/signing.md). Without it, the script signs ad hoc and macOS asks for Input Monitoring again after every build.
+There's no update check. To update, download the newer DMG and replace the app in Applications. Every release is signed with the same certificate, so Input Monitoring permission carries over.
 
 **Input Monitoring.** Downstroke never prompts at launch. Open the menu bar panel and use the button there, which asks macOS for access and opens the Input Monitoring page in System Settings. If sounds don't start within a few seconds of allowing it, quit and reopen Downstroke, since macOS often applies a new grant only on relaunch. It never asks for Accessibility or the microphone.
 
@@ -165,11 +164,15 @@ Pausing the engine when idle is what brings hit strength on inside its budget. W
 
 ## Build and test
 
+You'll need macOS 27 and the Xcode Command Line Tools. Full Xcode isn't required.
+
 ```bash
 scripts/bundle.sh          # release build, signed: build/Downstroke.app
 scripts/bundle.sh --debug  # debug build, includes the --self-test suites
 scripts/test.sh            # unit tests
 ```
+
+macOS ties the Input Monitoring permission to the app's code signature. `scripts/bundle.sh` signs with a local certificate called `Downstroke Local Signing`; create it once as described in [docs/signing.md](docs/signing.md). Without it, the script signs ad hoc and macOS asks for Input Monitoring again after every build.
 
 Use `scripts/test.sh` rather than `swift test`. The Command Line Tools build sometimes loses the Swift Testing plugin path, and the script passes it explicitly. For the same reason, the app code avoids SwiftUI macros such as `@State`.
 
@@ -183,6 +186,16 @@ build/Downstroke.app/Contents/MacOS/Downstroke --self-test audio
 The suites are `tap-reenable`, `sensor-restart`, `audio`, `audio-reconfigure`, `engine-pause`, `mic`, `panel` and `settings`. `panel-shots` and `settings-shots` capture the screenshots this README is built from into `build/`.
 
 The app icon is drawn in code by `scripts/icon.swift`. Run `swift scripts/icon.swift` after changing it to rewrite `Resources/AppIcon.icns`. It's drawn full bleed on purpose: macOS 26 and later apply their own rounded shape. To refresh the vendored sound packs, run `scripts/vendor-packs.sh`.
+
+## Releasing
+
+Bump `CFBundleShortVersionString` in `Resources/Info.plist`, merge to `main`, then from an up-to-date `main`:
+
+```bash
+scripts/release.sh --publish
+```
+
+That builds `build/Downstroke-<version>.dmg`, tags `v<version>` and uploads the DMG to a new GitHub release with generated notes. Without `--publish` it only builds the DMG. It stops if the app isn't signed with `Downstroke Local Signing`, since a differently signed update would lose people's Input Monitoring permission.
 
 ## Credits and licences
 

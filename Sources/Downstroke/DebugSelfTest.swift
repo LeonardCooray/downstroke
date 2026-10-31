@@ -19,6 +19,7 @@ enum DebugSelfTest {
             case "sensor-restart": await sensorRestart()
             case "audio": await audio()
             case "audio-reconfigure": await audioReconfigure()
+            case "mic": await mic()
             default: check(false, "unknown self-test \(args[i + 1])")
             }
             exit(failures == 0 ? 0 : 1)
@@ -91,6 +92,26 @@ enum DebugSelfTest {
         let renders = rig.engine.stats.renders.load(ordering: .relaxed)
         await checkAuditionLatency(rig, bank, "audition after the change")
         check(rig.engine.stats.renders.load(ordering: .relaxed) > renders, "render block runs after the rebuild")
+    }
+
+    static func mic() async {
+        func describe() -> String {
+            guard let states = SystemAudio.processInputStates else { return "process list unavailable" }
+            let inputs = states.filter(\.input).map { "\($0.pid)" }
+            return "\(states.count) audio client processes, running input: [\(inputs.joined(separator: ", "))], ours \(getpid())"
+        }
+        let before = SystemAudio.micInUse
+        print("  before engine: micInUse \(before); \(describe())")
+        check(SystemAudio.processInputStates != nil, "process object list available")
+        let rig = AudioRig()
+        do { try rig.engine.start() } catch { return check(false, "engine starts (\(error))") }
+        defer { rig.engine.stop() }
+        try? await Task.sleep(for: .milliseconds(300))
+        let after = SystemAudio.micInUse
+        print("  engine running: micInUse \(after); \(describe())")
+        check(SystemAudio.processInputStates?.contains { $0.pid == getpid() && $0.input } == false,
+              "our process is not running input")
+        check(after == before, "our output engine does not change micInUse")
     }
 
     private static func startAudioRig() -> (AudioRig, SampleBank)? {

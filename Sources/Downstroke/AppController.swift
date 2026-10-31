@@ -95,6 +95,9 @@ final class AppController: ObservableObject {
     private var statusTimer: Timer?
     private var wakeObserver: (any NSObjectProtocol)?
     private var auditionUntil = 0.0
+    // Audition latencies never reach LatencyStats: the readout is from real key presses only.
+    private var lastAudition = -Double.infinity
+    private var auditionedSinceDrain = false
     private var sensorAvailable = false
     private var sensorStartedAt = 0.0
 
@@ -161,7 +164,10 @@ final class AppController: ObservableObject {
     /// Plays a press from `boardID`, even while off or muted.
     func audition(_ boardID: String) {
         guard let bank = bank(for: boardID) else { return }
-        auditionUntil = MonotonicClock.now() + 2
+        drainLatencies(keep: !auditionedSinceDrain)
+        lastAudition = MonotonicClock.now()
+        auditionedSinceDrain = true
+        auditionUntil = lastAudition + 2
         startEngine()
         pipeline.audition(boardBank: bank)
     }
@@ -239,6 +245,16 @@ final class AppController: ObservableObject {
         pipeline.setContext(frontmostBundleID: frontmostBundleID, micInUse: micInUse)
     }
 
+    private func drainLatencies(keep: Bool) {
+        drained.removeAll(keepingCapacity: true)
+        mixer.drainLatencies(into: &drained)
+        guard keep, !drained.isEmpty else { return }
+        for value in drained { stats.add(value) }
+        latencyP50 = stats.p50
+        latencyP99 = stats.p99
+        latencyCount = stats.count
+    }
+
     private func didWake() {
         if case .unavailable = sensorStatus { sensorStatus = .off }
         if sensor.isRunning { sensor.rewake() }
@@ -255,13 +271,12 @@ final class AppController: ObservableObject {
 
     // 4 Hz: latency stats, retired banks, sensor and permission state.
     private func refresh() {
-        drained.removeAll(keepingCapacity: true)
-        mixer.drainLatencies(into: &drained)
-        if !drained.isEmpty {
-            for value in drained { stats.add(value) }
-            latencyP50 = stats.p50
-            latencyP99 = stats.p99
-            latencyCount = stats.count
+        // An audition's sample lands within a render or two; wait that out, then drop the whole drain.
+        if !auditionedSinceDrain {
+            drainLatencies(keep: true)
+        } else if MonotonicClock.now() - lastAudition >= 0.05 {
+            drainLatencies(keep: false)
+            auditionedSinceDrain = false
         }
         mixer.collectRetired(now: MonotonicClock.now())
         let velocity = pipeline.lastVelocity

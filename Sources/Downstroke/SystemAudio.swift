@@ -7,6 +7,7 @@ enum SystemAudio {
     private static var handlers: [() -> Void] = []
     private static var installed = false
     private static var watchedInput = AudioObjectID(kAudioObjectUnknown)
+    private static var watchedProcesses: Set<AudioObjectID> = []
     private static let listener: AudioObjectPropertyListenerBlock = { _, _ in
         MainActor.assumeIsolated { changed() }
     }
@@ -17,10 +18,19 @@ enum SystemAudio {
         return transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
     }
 
-    /// Some process is running the default input device.
+    /// Another process is running audio input on any device.
     static var micInUse: Bool {
-        guard let device = defaultDevice(kAudioHardwarePropertyDefaultInputDevice),
-              let running = value(device, kAudioDevicePropertyDeviceIsRunningSomewhere) else { return false }
+        if let processes = processObjects() {
+            let me = getpid()
+            return processes.contains { process in
+                guard value(process, kAudioProcessPropertyIsRunningInput) ?? 0 != 0 else { return false }
+                return value(process, kAudioProcessPropertyPID).map { pid_t(bitPattern: $0) } != me
+            }
+        }
+        // Device-wide flag: our own output would set it when input and output share a device.
+        guard let input = defaultDevice(kAudioHardwarePropertyDefaultInputDevice),
+              input != defaultDevice(kAudioHardwarePropertyDefaultOutputDevice),
+              let running = value(input, kAudioDevicePropertyDeviceIsRunningSomewhere) else { return false }
         return running != 0
     }
 
@@ -39,16 +49,53 @@ enum SystemAudio {
         guard !installed else { return }
         installed = true
         let system = AudioObjectID(kAudioObjectSystemObject)
-        for selector in [kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyDefaultInputDevice] {
+        for selector in [kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyDefaultInputDevice,
+                         kAudioHardwarePropertyProcessObjectList] {
             var address = Self.address(selector)
             AudioObjectAddPropertyListenerBlock(system, &address, .main, listener)
         }
         watchInput()
+        watchProcesses()
     }
 
     private static func changed() {
         watchInput()
+        watchProcesses()
         for handler in handlers { handler() }
+    }
+
+    // A running-input listener on every audio client process; the list listener keeps the set current.
+    private static func watchProcesses() {
+        let current = Set(processObjects() ?? [])
+        var address = Self.address(kAudioProcessPropertyIsRunningInput)
+        for gone in watchedProcesses.subtracting(current) {
+            AudioObjectRemovePropertyListenerBlock(gone, &address, .main, listener)
+        }
+        for new in current.subtracting(watchedProcesses) {
+            AudioObjectAddPropertyListenerBlock(new, &address, .main, listener)
+        }
+        watchedProcesses = current
+    }
+
+    #if DEBUG
+    /// PIDs of audio client processes and whether each is running input, for the mic self-test.
+    static var processInputStates: [(pid: pid_t, input: Bool)]? {
+        processObjects()?.map { process in
+            (value(process, kAudioProcessPropertyPID).map { pid_t(bitPattern: $0) } ?? -1,
+             value(process, kAudioProcessPropertyIsRunningInput) ?? 0 != 0)
+        }
+    }
+    #endif
+
+    /// The HAL's audio client process objects, or nil when the list is unavailable.
+    private static func processObjects() -> [AudioObjectID]? {
+        var address = address(kAudioHardwarePropertyProcessObjectList)
+        let system = AudioObjectID(kAudioObjectSystemObject)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(system, &address, 0, nil, &size) == noErr else { return nil }
+        var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        guard AudioObjectGetPropertyData(system, &address, 0, nil, &size, &ids) == noErr else { return nil }
+        return Array(ids.prefix(Int(size) / MemoryLayout<AudioObjectID>.size))
     }
 
     // The running-state listener follows the default input device.

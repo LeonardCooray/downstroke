@@ -51,24 +51,25 @@ banks: 20 loaded in 0.16 s, 32.4 MB of PCM
 engine: 48000 Hz, I/O buffer 128 frames (2.67 ms), render lead 3.66 ms (output host time minus render start)
 output device: safety offset 48 + latency 60 frames = 2.25 ms; lead minus buffer 0.99 ms
 render-cycle start = output host time minus the smallest render lead seen (3.55 ms)
-PASS latency p99, key event to render-cycle start, hit strength off 2.79 ms (budget 5.67 ms; p50 1.36 ms, max 2.80 ms, n=450)
-PASS latency p99, key event to render-cycle start, hit strength on 11.55 ms (budget 13.67 ms; p50 2.79 ms, max 11.98 ms, n=300)
-info key event to output time (what you hear, as the live readout), hit strength off: p99 6.34 ms, p50 4.91 ms, max 6.35 ms, n=450 (not checked)
-info key event to output time (what you hear, as the live readout), hit strength on: p99 15.10 ms, p50 6.34 ms, max 15.53 ms, n=300 (not checked)
-PASS idle CPU, engine running (hit strength off) 0.41% of a core (budget 1.0%)
-info idle CPU, engine + synthetic 800 Hz sensor: 0.83% of a core (not checked)
-FAIL idle CPU, engine + real sensor (794 Hz), hit-strength-on idle budget 1.59% of a core (budget 1.5%)
-info idle CPU, real sensor only, engine stopped: 1.11% of a core (not checked)
-PASS typing CPU, hit strength off 0.57% of a core (budget 3.0%)
+PASS latency p99, key event to render-cycle start, hit strength off 2.79 ms (budget 5.67 ms; p50 1.52 ms, max 2.80 ms, n=150)
+PASS latency p99, key event to render-cycle start, hit strength on 11.65 ms (budget 13.67 ms; p50 10.14 ms, max 11.80 ms, n=150)
+info key event to output time (what you hear, as the live readout), hit strength off: p99 6.34 ms, p50 5.06 ms, max 6.34 ms, n=150 (not checked)
+info key event to output time (what you hear, as the live readout), hit strength on: p99 15.19 ms, p50 13.69 ms, max 15.34 ms, n=150 (not checked)
+info stale triggers dropped: 0 (latency samples are key presses only, one per press)
+PASS idle CPU, engine running (hit strength off) 0.40% of a core (budget 1.0%)
+info idle CPU, engine + synthetic 800 Hz sensor: 0.88% of a core (not checked)
+FAIL idle CPU, engine + real sensor (794 Hz), hit-strength-on idle budget 1.54% of a core (budget 1.5%)
+info idle CPU, real sensor only, engine stopped: 1.07% of a core (not checked)
+PASS typing CPU, hit strength off 0.60% of a core (budget 3.0%)
 PASS typing CPU, hit strength on (synthetic sensor) 1.52% of a core (budget 3.0%)
-PASS phys_footprint 55.6 MB with 20 of 20 banks loaded (budget 100 MB, all banks)
-PASS render overruns 0 in 19682 renders (worst 0.015 ms, limit 1.333 ms)
+PASS phys_footprint 56.3 MB with 20 of 20 banks loaded (budget 100 MB, all banks)
+PASS render overruns 0 in 19672 renders (worst 0.012 ms, limit 1.333 ms)
 FAIL
 ```
 
-Read it like this: with hit strength off the p99 latency is 2.79 ms to the start of the render cycle that plays the key, and about 6.3 ms to the output time (what you hear). With it on, the 8 ms measurement window brings that to 11.55 ms (15.1 ms at the output), and key releases, which need no measurement, stay at 2.78 ms. Nothing overran in 19,682 renders.
+Read it like this: with hit strength off the p99 latency is 2.79 ms to the start of the render cycle that plays the key, and about 6.3 ms to the output time (what you hear). With it on, the 8 ms measurement window brings that to 11.65 ms (15.2 ms at the output). Latency samples count each key press once; key releases aren't measured. Nothing overran in 19,672 renders.
 
-One budget is missed on this Mac. Idle CPU with the real sensor streaming and the engine running measured 1.59% and 1.60% across two runs, against the 1.5% budget. The sensor on its own costs 1.1% (macOS's HID path), and the engine adds roughly 0.4% on top. Everything else passes.
+One budget is missed on this Mac. Idle CPU with the real sensor streaming and the engine running measured 1.54% here (1.59% and 1.60% in earlier runs), against the 1.5% budget. The sensor on its own costs about 1.1% (macOS's HID path), and the engine adds roughly 0.4% on top. Everything else passes.
 
 The bench uses its own isolated preferences domain and plays audio briefly at the default volume (0.68).
 

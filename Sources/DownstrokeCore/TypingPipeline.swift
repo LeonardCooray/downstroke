@@ -52,14 +52,15 @@ public final class TypingPipeline: @unchecked Sendable {
         }
     }
 
-    /// Key tap thread.
-    public func keyEvent(_ e: KeyEvent, now: Double) {
+    /// Key tap thread. False when the event was dropped (off, muted or no bank yet).
+    @discardableResult
+    public func keyEvent(_ e: KeyEvent, now: Double) -> Bool {
         state.withLock { s in
             guard s.bank != nil, MuteRules.shouldPlay(
                 enabled: s.settings.enabled, frontmostBundleID: s.frontmostBundleID,
                 muted: s.settings.mutedBundleIDs, micInUse: s.micInUse,
                 muteWhileMicInUse: s.settings.muteWhileMicInUse)
-            else { return }
+            else { return false }
             if !sensing(s) {
                 emit(e, velocity: Self.fixedVelocity, &s)
             } else if e.isRelease && s.pending.isEmpty {
@@ -69,6 +70,7 @@ public final class TypingPipeline: @unchecked Sendable {
                 resolve(now: now, &s)
                 publishPending(s)
             }
+            return true
         }
     }
 

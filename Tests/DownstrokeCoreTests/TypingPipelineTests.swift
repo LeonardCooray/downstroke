@@ -120,6 +120,17 @@ private struct Rig {
     rig = Rig(sensorAvailable: false)
 }
 
+@Test func keyEventReportsWhetherItWasAccepted() {
+    var settings = DownstrokeSettings()
+    settings.mutedBundleIDs = ["com.apple.Terminal"]
+    let rig = Rig(settings: settings)
+    #expect(rig.pipeline.keyEvent(press(at: 1.0), now: 1.0))
+    #expect(rig.pipeline.keyEvent(release(at: 1.1), now: 1.1))
+    rig.pipeline.setContext(frontmostBundleID: "com.apple.Terminal", micInUse: false)
+    #expect(!rig.pipeline.keyEvent(press(at: 2.0), now: 2.0))
+    #expect(!TypingPipeline(queue: TriggerQueue(), ring: nil).keyEvent(press(at: 3.0), now: 3.0))
+}
+
 @Test func disablingSensingFlushesPendingPress() {
     var settings = DownstrokeSettings()
     let rig = Rig(settings: settings)

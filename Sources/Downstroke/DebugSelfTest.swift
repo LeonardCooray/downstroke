@@ -709,10 +709,12 @@ enum DebugSelfTest {
         permission.footer = "Key → sound — ms"
         var scrolled = listening
         scrolled.currentBoardID = "cherry-mx-clear"
+        var fixed = listening
+        fixed.fixedStrength = true
         let out = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("build")
         let shots: [(String, PanelState, NSAppearance.Name)] = [
             ("light", listening, .aqua), ("dark", listening, .darkAqua),
-            ("permission-dark", permission, .darkAqua), ("scrolled-dark", scrolled, .darkAqua),
+            ("permission-dark", permission, .darkAqua), ("scrolled-dark", scrolled, .darkAqua), ("fixed-dark", fixed, .darkAqua),
         ]
         for (name, state, appearance) in shots {
             model.debugForceHover(nil)

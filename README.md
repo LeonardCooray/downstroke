@@ -1,36 +1,103 @@
+<div align="center">
+
+<img src="docs/images/icon.png" alt="Downstroke icon" width="128">
+
 # Downstroke
 
-A macOS menu bar app that plays a real mechanical-switch recording on every key press, and shapes the sound by how hard you hit the key. It's built for a MacBook's built-in keyboard and aims to be fast enough that you never notice it's there.
+**Mechanical-keyboard sound for your MacBook, fast enough that you forget it's there.**
 
-It's a personal tool, not a product. It needs macOS 27 or later, and it's menu bar only (no Dock icon).
+![macOS 27+](https://img.shields.io/badge/macOS-27%2B-000000?logo=apple&logoColor=white)
+![Swift](https://img.shields.io/badge/Swift-native-F05138?logo=swift&logoColor=white)
+![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 
-## Build and install
+<img src="docs/images/hero.png" alt="The Downstroke panel open from the menu bar, showing volume, the hit-strength meter and the board list, next to the Sound settings" width="800">
 
-You need the Command Line Tools. Full Xcode isn't required.
+</div>
+
+Downstroke lives in your menu bar and plays a real mechanical-switch recording every time you press a key. Pick from 20 boards, from thocky Holy Pandas to clacky Alps, and switch on the next keystroke.
+
+It's built for a MacBook's built-in keyboard. The sound starts about 5 ms after the key event, and nothing about your typing is stored or leaves your Mac. It's a personal tool, not a product.
+
+## Install
+
+Downstroke needs macOS 27 and the Xcode Command Line Tools. Full Xcode isn't required. There are no prebuilt releases yet, so build it yourself:
 
 ```bash
 scripts/bundle.sh          # release build, signed: build/Downstroke.app
-scripts/bundle.sh --debug  # debug build, includes the --self-test suites
-scripts/test.sh            # unit tests (use this, not bare `swift test`)
+open build/Downstroke.app
 ```
 
-Copy `build/Downstroke.app` wherever you like and open it. Updates come from rebuilding; there's no update check.
+Copy `build/Downstroke.app` wherever you like. Updates come from rebuilding; there's no update check.
 
-macOS ties the Input Monitoring permission to the app's code signature. `scripts/bundle.sh` signs with a local certificate called `Downstroke Local Signing`; create it once as described in [docs/signing.md](docs/signing.md). If the certificate is missing, the script falls back to an ad-hoc signature with a warning, and macOS will ask for Input Monitoring again after every build.
+macOS ties the Input Monitoring permission to the app's code signature. `scripts/bundle.sh` signs with a local certificate called `Downstroke Local Signing`; create it once as described in [docs/signing.md](docs/signing.md). Without it, the script signs ad hoc and macOS asks for Input Monitoring again after every build.
 
-**Input Monitoring.** Downstroke listens for key presses with a listen-only event tap, which needs this permission. It never prompts at launch. Open the menu bar panel and use the button there, which asks macOS for access and opens the Input Monitoring page in System Settings. If sounds don't start within a few seconds of allowing it, quit and reopen Downstroke (macOS often applies a new grant only on relaunch). It never asks for Accessibility or the microphone.
+**Input Monitoring.** Downstroke never prompts at launch. Open the menu bar panel and use the button there, which asks macOS for access and opens the Input Monitoring page in System Settings. If sounds don't start within a few seconds of allowing it, quit and reopen Downstroke, since macOS often applies a new grant only on relaunch. It never asks for Accessibility or the microphone.
 
-**Checking the sensor.** `build/Downstroke.app/Contents/MacOS/Downstroke --probe` (run from a terminal) wakes the accelerometer, reads it for a few seconds and checks that hard taps read at least twice as strong as soft ones. Use it to confirm hit strength will work on your Mac.
+## Features
+
+**Real switches**
+
+- 20 boards grouped by texture: Thocky, Creamy, Clacky, Crisp and Thump
+- Hover a board or press its play button to audition it, and click to switch, effective on the next key
+- Key-up sounds, so you hear each switch's release as well as its press
+- Stereo placement by key position, with a width slider
+- A small random pitch and gain variation on every press, so repeats don't sound robotic
+
+**Quiet when it should be**
+
+- Mute in the apps you choose, such as a meeting app or a notes app you dictate into
+- Mute automatically while any app is using the microphone
+- Toggle sound from anywhere with ⌃⌥⌘K
+
+<img src="docs/images/apps.png" alt="Settings › Apps listing Safari, Notes and Zoom as muted apps, with the mute-while-the-microphone-is-in-use switch turned on" width="800">
+
+**Feel, if your Mac can sense it**
+
+- Optional hit strength reads the MacBook's motion sensor, so soft taps sound lighter and hard strikes heavier
+- A live meter in the panel shows how hard each key landed
+- Off by default; see [Hit strength](#hit-strength) for why
+
+**Fast, and honest about it**
+
+- The panel shows your key-to-sound latency, and Settings › Diagnostics breaks it down with the engine, sensor, output and permission status
+- When output is Bluetooth, the panel says "Bluetooth adds delay" rather than showing a misleading figure
+- Light and dark mode follow the system
+
+<img src="docs/images/diagnostics.png" alt="Dark mode: Settings › Diagnostics with input, audio output and latency rows, next to the panel showing fixed strength" width="800">
+
+Autorepeat presses don't play.
+
+## Keys
+
+| Key | What it does |
+|---|---|
+| ⌃⌥⌘K | Turn Downstroke on or off from any app (you can change it in Settings) |
+| ⌘, | Open Settings while the panel is open |
+| Esc | Close the panel |
+
+## Settings
+
+Open **Settings…** from the panel to change:
+
+- **General:** the on/off hotkey, launch at login (off by default, via `SMAppService`) and Quit
+- **Sound:** hit strength and its sensitivity, key-up sounds and stereo width
+- **Apps:** the muted apps list and mute while the microphone is in use
+- **Diagnostics:** latency p50/p99, engine, sensor, output and permission status, with a button to copy it all
+- **About:** the version, credits and licences
+
+Output follows the system default device.
 
 ## Hit strength
 
 How hard a key lands changes how it sounds. Downstroke reads the MacBook's built-in accelerometer at about 800 Hz (no root needed) and, for each key press, looks at a window from 15 ms before to 8 ms after the key event. The strongest impact in that window, with bumps above 0.3 g rejected, becomes a velocity from 0 to 1.
 
-Each board has several real recordings of ordinary keys (5 to 26, depending on the pack) and usually one each for keys like space and return. At load, Downstroke derives four velocity layers (soft, medium, hard and slam) from every recording. Each press picks one recording and crossfades between that recording's two nearest layers, so strength changes the brightness and weight of the sound, not its pitch or timing. Every press also gets a small random pitch (±3%) and gain (±10%) variation so repeats don't sound robotic.
+Each board has several real recordings of ordinary keys (5 to 26, depending on the pack) and usually one each for keys like space and return. At load, Downstroke derives four velocity layers (soft, medium, hard and slam) from every recording. Each press picks one recording and crossfades between that recording's two nearest layers, so strength changes the brightness and weight of the sound, not its pitch or timing. Every press also gets a small random pitch (±3%) and gain (±10%) variation.
 
 **Off by default.** On the MacBook Pro (M5 Pro) it was built on, `--probe` measured hard presses no stronger than soft ones (median 11.1 mg hard against 11.9 mg soft), so hit strength ships switched off and every press plays at a fixed medium strength. Turn it on in **Settings › Sound** if `--probe` passes on your Mac.
 
-**The trade-off.** To measure a press, Downstroke has to wait for the key to bottom out, so the sound starts about 8 ms after the key event. That's the price of dynamics. If you'd rather have the fastest possible response, turn it off in **Settings › Sound**. The sound then starts as soon as the key event arrives.
+**Checking the sensor.** `build/Downstroke.app/Contents/MacOS/Downstroke --probe` (run from a terminal) wakes the accelerometer, reads it for a few seconds and checks that hard taps read at least twice as strong as soft ones. Type the taps in another app such as TextEdit: a terminal with Secure Keyboard Entry on hides key presses from the listener.
+
+**The trade-off.** To measure a press, Downstroke has to wait for the key to bottom out, so with hit strength on the sound starts about 8 ms later. That's the price of dynamics. With it off, the sound starts as soon as the key event arrives.
 
 **No sensor, no dynamics.** On a desktop Mac, an Intel Mac, or with an external keyboard (which doesn't shake the laptop's case), there's nothing to measure. Downstroke plays every press at a fixed medium strength and says so in Settings › Diagnostics. It never fakes dynamics.
 
@@ -49,7 +116,10 @@ After 60 seconds with no key press, no audition and nothing still sounding, the 
 - Memory: at most 100 MB with all 20 boards loaded.
 - Render overruns: zero.
 
-The bench also prints output-time latency, which is what you actually hear (it includes the device's output delay). It uses a 1 s idle timeout instead of 60 s so the pause phases don't take minutes. Results from this Mac (MacBook Pro, Apple M5 Pro, macOS 27.2, built-in speakers, release build):
+The bench also prints output-time latency, which is what you actually hear (it includes the device's output delay). It uses a 1 s idle timeout instead of 60 s so the pause phases don't take minutes, uses its own isolated preferences domain, and plays audio briefly at the default volume (0.68).
+
+<details>
+<summary>Bench results from this Mac (MacBook Pro, Apple M5 Pro, macOS 27.2, built-in speakers, release build)</summary>
 
 ```text
 banks: 20 loaded in 0.17 s, 32.4 MB of PCM
@@ -80,32 +150,39 @@ PASS render overruns 0 in 30906 renders (worst 0.021 ms, limit 1.333 ms)
 PASS
 ```
 
+</details>
+
 Read it like this: with hit strength off the p99 latency is 2.92 ms to the start of the render cycle that plays the key, and about 6.3 ms to the output time (what you hear). With it on, the 8 ms measurement window brings that to 11.80 ms (15.2 ms at the output). Latency samples count each key press once; key releases aren't measured. Nothing overran in 30,906 renders.
 
 Pausing the engine when idle is what brings hit strength on inside its budget. With the real sensor streaming, idle CPU is 1.41% while the engine runs and 0.98% once it has paused, which is about the sensor's own cost. The price is the first key after a pause: 34.82 ms p99 to the render cycle (38.2 ms at the output), almost all of it the output device restarting. A slower restart (Bluetooth, say) makes that key later but doesn't drop it: the key that wakes the engine, and any after it, are exempt from the mixer's 0.25 s stale-trigger guard. The engine idles with `stop()` and stays prepared; the bench also measures `pause()`, which costs the same idle CPU and resumes no faster.
 
-The bench uses its own isolated preferences domain and plays audio briefly at the default volume (0.68).
-
-## Features
-
-- Menu bar panel: on/off, volume, a live hit-strength meter, and the key-to-sound latency readout.
-- 20 boards grouped by texture (Thocky, Creamy, Clacky, Crisp, Thump). Hover a board or press its play button to audition it; click to switch, effective on the next key.
-- Global hotkey, ⌃⌥⌘K by default, to toggle sound from any app.
-- Mute in chosen apps, and mute while the microphone is in use.
-- Key-up sounds (the switch's release).
-- Stereo placement by key position, with a width slider.
-- Launch at login, off by default (via `SMAppService`).
-- Diagnostics in Settings: latency p50/p99, engine, sensor, output and permission status.
-- Output follows the system default device. When it's Bluetooth, the panel says "Bluetooth adds delay" rather than showing a misleading figure.
-
-Autorepeat presses don't play.
-
 ## Privacy
 
-- The key listener is listen-only and reads three things: the key code, the autorepeat flag and the event timestamp. It never reads characters.
+- The key listener is a listen-only event tap and reads three things: the key code, the autorepeat flag and the event timestamp. It never reads characters.
 - Nothing about your typing is stored or logged. It's processed in memory and discarded.
 - There's no network code at all: no analytics, no update checks, no downloads.
 - The microphone is never opened. "Mute while the microphone is in use" uses Core Audio's per-process running-input flag, which only reports whether some app is recording.
+
+## Build and test
+
+```bash
+scripts/bundle.sh          # release build, signed: build/Downstroke.app
+scripts/bundle.sh --debug  # debug build, includes the --self-test suites
+scripts/test.sh            # unit tests
+```
+
+Use `scripts/test.sh` rather than `swift test`. The Command Line Tools build sometimes loses the Swift Testing plugin path, and the script passes it explicitly. For the same reason, the app code avoids SwiftUI macros such as `@State`.
+
+A debug build also has self-tests that drive the real app:
+
+```bash
+scripts/bundle.sh --debug
+build/Downstroke.app/Contents/MacOS/Downstroke --self-test audio
+```
+
+The suites are `tap-reenable`, `sensor-restart`, `audio`, `audio-reconfigure`, `engine-pause`, `mic`, `panel` and `settings`. `panel-shots` and `settings-shots` capture the screenshots this README is built from into `build/`.
+
+The app icon is drawn in code by `scripts/icon.swift`. Run `swift scripts/icon.swift` after changing it to rewrite `Resources/AppIcon.icns`. It's drawn full bleed on purpose: macOS 26 and later apply their own rounded shape. To refresh the vendored sound packs, run `scripts/vendor-packs.sh`.
 
 ## Credits and licences
 
@@ -123,4 +200,6 @@ Borrowed approaches:
 
 Every licence notice is in [`LICENSES/`](LICENSES/) and is bundled into the app, and the same credits are in Settings › About. Downstroke was inspired by Meckey, Switchcraft and Kutuk; it contains no code or sounds from Meckey.
 
-Downstroke itself is MIT licensed (see [LICENSE](LICENSE)). To refresh the vendored packs, run `scripts/vendor-packs.sh`.
+## License
+
+[MIT](LICENSE) © 2026 Leonard Cooray

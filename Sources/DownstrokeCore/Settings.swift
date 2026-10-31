@@ -4,7 +4,7 @@ public struct DownstrokeSettings: Codable, Equatable, Sendable {
     public var enabled = true
     public var volume: Float = 0.68
     public var boardID = "holy-panda"
-    public var hitStrengthEnabled = false
+    public var hitStrengthEnabled = true
     public var sensitivity: Float = 0.5
     public var keyUpSounds = true
     public var stereoWidth: Float = 0.5

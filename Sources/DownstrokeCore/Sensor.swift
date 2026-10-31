@@ -33,7 +33,7 @@ public struct ImpactFilter: Sendable {
     private var z = Biquad()
     private var primed = false
 
-    public init(sampleRate: Double = 800, cutoff: Double = 25) {
+    public init(sampleRate: Double = 800, cutoff: Double = 5) {
         let k = tan(Double.pi * cutoff / sampleRate)
         let norm = 1 / (1 + 2.0.squareRoot() * k + k * k)
         b0 = norm

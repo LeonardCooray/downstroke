@@ -107,10 +107,10 @@ final class MeterModel: ObservableObject {
         if lit != 0 { lit = 0 }
     }
 
-    func step(press: (count: UInt32, velocity: Float), now: Double) {
+    func step(press: (count: UInt32, level: Float), now: Double) {
         if press.count != seenCount {
             seenCount = press.count
-            peak = press.velocity
+            peak = press.level
             peakAt = now
         }
         let level = peak * Float(max(0, 1 - (now - peakAt) / Self.decay))

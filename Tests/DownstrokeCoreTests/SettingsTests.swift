@@ -16,7 +16,7 @@ private func withSuite(_ body: (UserDefaults, String) throws -> Void) rethrows {
         #expect(s.enabled)
         #expect(s.volume == 0.68)
         #expect(s.boardID == "holy-panda")
-        #expect(!s.hitStrengthEnabled)
+        #expect(s.hitStrengthEnabled)
         #expect(s.sensitivity == 0.5)
         #expect(s.keyUpSounds)
         #expect(s.stereoWidth == 0.5)
@@ -62,5 +62,14 @@ private func withSuite(_ body: (UserDefaults, String) throws -> Void) rethrows {
         store.settings.volume = 0.11
         store.save()
         #expect(defaults.persistentDomain(forName: name)?["settings.v1"] != nil)
+    }
+}
+
+@Test func slamAccentDefaultsOnButASavedOffStaysOff() {
+    withSuite { defaults, _ in
+        defaults.set(Data("{}".utf8), forKey: "settings.v1")
+        #expect(SettingsStore(defaults: defaults).settings.hitStrengthEnabled)
+        defaults.set(Data(#"{"hitStrengthEnabled":false}"#.utf8), forKey: "settings.v1")
+        #expect(!SettingsStore(defaults: defaults).settings.hitStrengthEnabled)
     }
 }

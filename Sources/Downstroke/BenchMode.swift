@@ -204,11 +204,9 @@ enum BenchMode {
         let offRender = off.latencies.map { $0 - minLead }, onRender = on.latencies.map { $0 - minLead }
         latencyLine("latency p99, key event to render-cycle start, hit strength off", offRender, budget: 0.003 + buffer)
         latencyLine("latency p99, key event to render-cycle start, hit strength on", onRender, budget: 0.008 + 0.003 + buffer)
-        // Presses wait for the 8 ms window, releases don't; the gap between them is unambiguous.
-        info("key event to render-cycle start, hit strength on, presses only", onRender.filter { $0 >= 0.008 })
-        info("key event to render-cycle start, hit strength on, releases only", onRender.filter { $0 < 0.008 })
         info("key event to output time (what you hear, as the live readout), hit strength off", off.latencies)
         info("key event to output time (what you hear, as the live readout), hit strength on", on.latencies)
+        print("info stale triggers dropped: \(rig.mixer.staleTriggers) (latency samples are key presses only, one per press)")
         cpuLine("idle CPU, engine running (hit strength off)", idle, budget: 1.0)
         print(String(format: "info idle CPU, engine + synthetic 800 Hz sensor: %.2f%% of a core (not checked)", syntheticIdle))
         if let realIdle, let realSensorOnly, realRate >= 700 {

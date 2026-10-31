@@ -34,6 +34,57 @@ private func planner(_ seed: UInt64 = 7) -> TriggerPlanner { TriggerPlanner(rand
     #expect(onCentre.map { slot(of: $0, in: sharedBank) } == [.press(.medium)])
 }
 
+@Test func blendUsesOneRecordingForBothLayers() throws {
+    var p = planner(11)
+    let settings = DownstrokeSettings()
+    #expect(sharedBank.presses(.alpha, .medium).count > 1)
+    var last = -1
+    for i in 0..<300 {
+        let v: Float = [0.3, 0.5, 0.7, 0.9][i % 4]
+        let out = p.plan(press(), velocity: v, bank: sharedBank, settings: settings)
+        let layers = TriggerPlanner.layers(for: v).map(\.0)
+        try #require(out.count == layers.count)
+        let first = sharedBank.presses(.alpha, layers[0])
+        let index = try #require(first.firstIndex { $0.left == out[0].clip.left })
+        for (t, layer) in zip(out, layers) {
+            #expect(t.clip.left == sharedBank.presses(.alpha, layer)[index].left)
+        }
+        #expect(index != last)
+        last = index
+        #expect(out.map(\.recordsLatency) == [true] + Array(repeating: false, count: out.count - 1))
+    }
+}
+
+@Test func blendFallsBackWhenLayerCountsDiffer() throws {
+    let dir = try makeTempDirectory()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let pack = dir.appendingPathComponent("u.switchcraft")
+    for name in ["s1", "m1", "m2", "m3"] {
+        try writeWAV([[Float](repeating: 0.25, count: 441)], to: pack.appendingPathComponent("\(name).wav"))
+    }
+    let manifest = #"{"formatVersion":1,"id":"u","name":"u","samples":{"alpha":{"soft":["s1.wav"],"medium":["m1.wav","m2.wav","m3.wav"]}}}"#
+    try manifest.write(to: pack.appendingPathComponent("manifest.json"), atomically: true, encoding: .utf8)
+    let board = try #require(try PackLibrary.load(from: dir).first { $0.id == "u" })
+    let bank = try SampleBank(board: board, sampleRate: 44100)
+    #expect(bank.presses(.alpha, .soft).count == 1 && bank.presses(.alpha, .medium).count == 3)
+    var p = planner(5)
+    var last: UnsafePointer<Float>?
+    for _ in 0..<100 {
+        let out = p.plan(press(), velocity: 0.25, bank: bank, settings: DownstrokeSettings())
+        try #require(out.count == 2)
+        #expect(out[0].clip.left == bank.presses(.alpha, .soft)[0].left)
+        #expect(bank.presses(.alpha, .medium).contains { $0.left == out[1].clip.left })
+        #expect(out[1].clip.left != last)
+        last = out[1].clip.left
+        #expect(out[0].recordsLatency && !out[1].recordsLatency)
+    }
+}
+
+@Test func releasesNeverRecordLatency() {
+    var p = planner()
+    #expect(p.plan(release(), velocity: 0.5, bank: sharedBank, settings: DownstrokeSettings()).allSatisfy { !$0.recordsLatency })
+}
+
 @Test func planPansByKeyPosition() throws {
     var p = planner()
     var settings = DownstrokeSettings()

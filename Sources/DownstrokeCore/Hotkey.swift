@@ -39,7 +39,7 @@ public struct Hotkey: Codable, Equatable, Hashable, Sendable {
         return s + (KeyCode.names[keyCode] ?? "Key \(keyCode)")
     }
 
-    // Needs ⌃, ⌥ or ⌘: plain or Shift-only keys would take over typing everywhere.
+    // Needs a modifier: plain or Shift-only keys would take over typing everywhere.
     public var isUsableGlobally: Bool {
         modifiers & (Self.control | Self.option | Self.command) != 0 && !isReservedBySystem
     }
@@ -52,7 +52,7 @@ public struct Hotkey: Codable, Equatable, Hashable, Sendable {
     /// Why this combo can't be the global shortcut, or nil if it can.
     public var problem: String? {
         if isReservedBySystem { return "\(displayString) is reserved by macOS" }
-        if !isUsableGlobally { return "Add ⌃, ⌥ or ⌘" }
+        if !isUsableGlobally { return "Add ⌃ or ⌘" }
         if modifiers & (Self.control | Self.option) == 0 { return "Add ⌃ or ⌥ so apps keep their ⌘ shortcuts" }
         if modifiers & (Self.control | Self.command) == 0 { return "Add ⌃ or ⌘ so ⌥ still types special characters" }
         return nil

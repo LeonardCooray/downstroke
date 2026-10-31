@@ -4,8 +4,10 @@ import Foundation
 public struct TriggerPlanner {
     public var random: any RandomNumberGenerator
 
-    // Last clip index used per list, so a list never repeats a clip back to back.
-    private var lastPress = [Int](repeating: -1, count: KeyGroup.allCases.count * Layer.allCases.count)
+    // Last recording index per group, so a group never repeats a recording back to back.
+    private var lastPress = [Int](repeating: -1, count: KeyGroup.allCases.count)
+    // Per-list last index, for blends whose layers hold different numbers of clips.
+    private var lastLayerPress = [Int](repeating: -1, count: KeyGroup.allCases.count * Layer.allCases.count)
     private var lastRelease = [Int](repeating: -1, count: KeyGroup.allCases.count)
 
     public init(random: any RandomNumberGenerator = SystemRandomNumberGenerator()) {
@@ -30,14 +32,23 @@ public struct TriggerPlanner {
 
         let v = min(max(velocity, 0), 1)
         let base = (0.55 + 0.45 * v) * uniform(0.9...1.1)
+        let layers = Self.layers(for: v)
+        let lists = layers.map { bank.presses(group, $0.0) }
+        // Derived layers line up by index, so one recording index serves every layer of the blend.
+        var shared: Int?
+        if lists.allSatisfy({ $0.count == lists[0].count }) {
+            guard let index = pick(from: lists[0].count, last: lastPress[groupIndex]) else { return [] }
+            lastPress[groupIndex] = index
+            shared = index
+        }
         var out: [Trigger] = []
-        for (layer, weight) in Self.layers(for: v) {
-            let clips = bank.presses(group, layer)
+        for ((layer, weight), clips) in zip(layers, lists) {
             let slot = groupIndex * Layer.allCases.count + layer.rawValue
-            guard let index = pick(from: clips.count, last: lastPress[slot]) else { continue }
-            lastPress[slot] = index
+            guard let index = shared ?? pick(from: clips.count, last: lastLayerPress[slot]) else { continue }
+            lastLayerPress[slot] = index
             out.append(Trigger(
-                clip: clips[index], gain: base * weight, pan: pan, rate: rate, eventTime: e.time, bankTag: bank.tag))
+                clip: clips[index], gain: base * weight, pan: pan, rate: rate, eventTime: e.time, bankTag: bank.tag,
+                recordsLatency: out.isEmpty))
         }
         return out
     }

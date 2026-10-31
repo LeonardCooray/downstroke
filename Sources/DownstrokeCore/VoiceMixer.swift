@@ -2,6 +2,8 @@ import Foundation
 import Synchronization
 
 private let idleTag = Int.min
+// Triggers older than this at render time are dropped, so an engine outage never replays a burst.
+private let staleAfter = 0.25
 
 private struct Voice {
     var clip: ClipRef?
@@ -66,6 +68,7 @@ public final class VoiceMixer: @unchecked Sendable {
     private let slotTags: UnsafeMutablePointer<Atomic<Int>>
     private let cycles = Atomic<Int>(0)
     private let activeCount = Atomic<Int>(0)
+    private let staleCount = Atomic<Int>(0)
     private let targetGain = Atomic<UInt32>(Float(1).bitPattern)
     private let sampleRateBits = Atomic<UInt64>(Double(48000).bitPattern)
     private let latencies = DoubleRing(capacity: 1024)
@@ -92,6 +95,9 @@ public final class VoiceMixer: @unchecked Sendable {
 
     /// Voices sounding at the end of the last render.
     public var activeVoices: Int { activeCount.load(ordering: .relaxed) }
+
+    /// Triggers dropped for being more than 0.25 s old when popped.
+    public var staleTriggers: Int { staleCount.load(ordering: .relaxed) }
 
     /// Clamped to 0...4; non-finite values are ignored.
     public func setMasterGain(_ g: Float) {
@@ -120,7 +126,13 @@ public final class VoiceMixer: @unchecked Sendable {
             state.pointee.rampStep = (target - state.pointee.gain) / Float(state.pointee.rampLength)
         }
 
-        while let trigger = queue.pop() { start(trigger, hostTime: hostTime) }
+        while let trigger = queue.pop() {
+            if hostTime - trigger.eventTime > staleAfter {
+                staleCount.wrappingAdd(1, ordering: .relaxed)
+                continue
+            }
+            start(trigger, hostTime: hostTime)
+        }
 
         left.update(repeating: 0, count: frames)
         right.update(repeating: 0, count: frames)
@@ -180,7 +192,7 @@ public final class VoiceMixer: @unchecked Sendable {
         )
         state.pointee.nextOrder &+= 1
         slotTags[slot].store(trigger.bankTag, ordering: .relaxed)
-        latencies.push(hostTime - trigger.eventTime)
+        if trigger.recordsLatency { latencies.push(hostTime - trigger.eventTime) }
     }
 
     /// Adds one voice into the outputs; false once it has ended.

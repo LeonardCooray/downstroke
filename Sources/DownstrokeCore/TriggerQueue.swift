@@ -10,14 +10,19 @@ public struct Trigger: Sendable {
     public var eventTime: Double
     /// The tag of the bank that owns `clip`.
     public var bankTag: Int
+    /// True on the first trigger of a key press only, so the latency readout counts each press once.
+    public var recordsLatency: Bool
 
-    public init(clip: ClipRef, gain: Float, pan: Float, rate: Float, eventTime: Double, bankTag: Int) {
+    public init(
+        clip: ClipRef, gain: Float, pan: Float, rate: Float, eventTime: Double, bankTag: Int, recordsLatency: Bool = false
+    ) {
         self.clip = clip
         self.gain = gain
         self.pan = pan
         self.rate = rate
         self.eventTime = eventTime
         self.bankTag = bankTag
+        self.recordsLatency = recordsLatency
     }
 }
 

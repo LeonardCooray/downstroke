@@ -38,8 +38,10 @@ private func render(_ mixer: VoiceMixer, _ out: Output, at hostTime: Double = 0)
     mixer.render(frames: blockFrames, hostTime: hostTime, left: out.left, right: out.right)
 }
 
-private func trigger(_ clip: ClipRef, gain: Float = 1, pan: Float = 0, rate: Float = 1, time: Double = 0, tag: Int = 1) -> Trigger {
-    Trigger(clip: clip, gain: gain, pan: pan, rate: rate, eventTime: time, bankTag: tag)
+private func trigger(
+    _ clip: ClipRef, gain: Float = 1, pan: Float = 0, rate: Float = 1, time: Double = 0, tag: Int = 1, records: Bool = true
+) -> Trigger {
+    Trigger(clip: clip, gain: gain, pan: pan, rate: rate, eventTime: time, bankTag: tag, recordsLatency: records)
 }
 
 @Test func rendersClipWithPanAndGain() {
@@ -129,6 +131,37 @@ private func trigger(_ clip: ClipRef, gain: Float = 1, pan: Float = 0, rate: Flo
     #expect(abs((latencies.first ?? 0) - 0.004) < 1e-9)
     mixer.drainLatencies(into: &latencies)
     #expect(latencies.count == 1)
+}
+
+@Test func onlyFlaggedTriggersRecordLatency() {
+    let clip = makeClip([Float](repeating: 0.1, count: 4800))
+    defer { freeClip(clip) }
+    let queue = TriggerQueue(), mixer = VoiceMixer(queue: queue), out = Output()
+    #expect(queue.push(trigger(clip, time: 10.000, records: true)))
+    #expect(queue.push(trigger(clip, time: 10.000, records: false)))
+    #expect(queue.push(trigger(clip, time: 10.001, records: false)))
+    render(mixer, out, at: 10.004)
+    #expect(mixer.activeVoices == 3)
+    var latencies: [Double] = []
+    mixer.drainLatencies(into: &latencies)
+    #expect(latencies.count == 1)
+}
+
+@Test func staleTriggersAreDropped() {
+    let clip = makeClip([Float](repeating: 0.1, count: 4800))
+    defer { freeClip(clip) }
+    let queue = TriggerQueue(), mixer = VoiceMixer(queue: queue), out = Output()
+    // An engine outage: a backlog of old presses, then one fresh one.
+    for _ in 0..<200 { #expect(queue.push(trigger(clip, time: 0))) }
+    #expect(queue.push(trigger(clip, time: 0.76)))
+    #expect(queue.push(trigger(clip, time: 0.9)))
+    render(mixer, out, at: 1.0)
+    #expect(mixer.activeVoices == 2)
+    #expect(mixer.staleTriggers == 200)
+    var latencies: [Double] = []
+    mixer.drainLatencies(into: &latencies)
+    #expect(latencies.count == 2)
+    #expect(latencies.allSatisfy { $0 <= 0.25 })
 }
 
 private func makeBank() throws -> (SampleBank, URL) {
@@ -277,13 +310,13 @@ private func makeBank() throws -> (SampleBank, URL) {
     let queue = TriggerQueue(), mixer = VoiceMixer(queue: queue), out = Output()
     let left = out.left, right = out.right
     // Other suites allocate in parallel; one quiet attempt is enough, a real leak shows every time.
-    let fresh = (0..<8).map { trigger(clip, pan: Float($0 % 3) - 1, time: Double($0)) }
+    let fresh = (0..<8).map { trigger(clip, pan: Float($0 % 3) - 1) }
     var latencies: [Double] = []
     latencies.reserveCapacity(4096)
     var deltas: [(blocks: Int, bytes: Int)] = []
     deltas.reserveCapacity(5)
     for _ in 0..<5 {
-        for i in 0..<48 { _ = queue.push(trigger(clip, pan: Float(i % 3) - 1, time: Double(i))) }
+        for i in 0..<48 { _ = queue.push(trigger(clip, pan: Float(i % 3) - 1, time: 1)) }
         mixer.render(frames: blockFrames, hostTime: 1, left: left, right: right)
         latencies.removeAll(keepingCapacity: true)
         mixer.drainLatencies(into: &latencies)
@@ -291,7 +324,14 @@ private func makeBank() throws -> (SampleBank, URL) {
         malloc_zone_statistics(nil, &before)
         for cycle in 0..<10_000 {
             // Fresh voices steal from a full mixer, and the master gain keeps ramping.
-            if cycle % 10 == 0 { for t in fresh { _ = queue.push(t) } }
+            if cycle % 10 == 0 {
+                for var t in fresh {
+                    t.eventTime = Double(cycle)
+                    _ = queue.push(t)
+                }
+            }
+            // A stale trigger takes the drop path every ten cycles too.
+            if cycle % 10 == 5 { _ = queue.push(fresh[0]) }
             if cycle % 100 == 0 { mixer.setMasterGain(cycle % 200 == 0 ? 0.5 : 1) }
             mixer.render(frames: blockFrames, hostTime: Double(cycle), left: left, right: right)
         }

@@ -222,7 +222,7 @@ enum BenchMode {
         cpuLine("typing CPU, hit strength off", off.cpu, budget: 3.0)
         cpuLine("typing CPU, hit strength on (synthetic sensor)", on.cpu, budget: 3.0)
         let mb = Double(footprint) / 1_048_576
-        check(footprint > 0 && mb <= 100 && banks.count == rig.boards.count,
+        check(footprint > 0 && mb <= 100 && !rig.boards.isEmpty && banks.count == rig.boards.count,
               String(format: "phys_footprint %.1f MB with %d of %d banks loaded (budget 100 MB, all banks)", mb, banks.count, rig.boards.count))
         check(renders > 0 && overruns == 0, String(format: "render overruns %d in %d renders (worst %.3f ms, limit %.3f ms)",
                                                    overruns, renders, rig.engine.stats.worstRender * 1000, buffer / 2 * 1000))

@@ -165,11 +165,12 @@ final class AppController: ObservableObject {
     func audition(_ boardID: String) {
         guard let bank = bank(for: boardID) else { return }
         drainLatencies(keep: !auditionedSinceDrain)
-        lastAudition = MonotonicClock.now()
-        auditionedSinceDrain = true
-        auditionUntil = lastAudition + 2
+        auditionUntil = MonotonicClock.now() + 2
         startEngine()
         pipeline.audition(boardBank: bank)
+        // Stamped after a possibly slow cold engine start, when the trigger is actually queued.
+        lastAudition = MonotonicClock.now()
+        auditionedSinceDrain = true
     }
 
     func requestPermission() { KeyTap.requestPermission() }
@@ -245,14 +246,16 @@ final class AppController: ObservableObject {
         pipeline.setContext(frontmostBundleID: frontmostBundleID, micInUse: micInUse)
     }
 
-    private func drainLatencies(keep: Bool) {
+    @discardableResult
+    private func drainLatencies(keep: Bool) -> Int {
         drained.removeAll(keepingCapacity: true)
         mixer.drainLatencies(into: &drained)
-        guard keep, !drained.isEmpty else { return }
+        guard keep, !drained.isEmpty else { return drained.count }
         for value in drained { stats.add(value) }
         latencyP50 = stats.p50
         latencyP99 = stats.p99
         latencyCount = stats.count
+        return drained.count
     }
 
     private func didWake() {
@@ -271,12 +274,12 @@ final class AppController: ObservableObject {
 
     // 4 Hz: latency stats, retired banks, sensor and permission state.
     private func refresh() {
-        // An audition's sample lands within a render or two; wait that out, then drop the whole drain.
+        // An audition's sample lands within a render or two of being queued; wait that out, then drop the whole drain.
         if !auditionedSinceDrain {
             drainLatencies(keep: true)
         } else if MonotonicClock.now() - lastAudition >= 0.05 {
-            drainLatencies(keep: false)
-            auditionedSinceDrain = false
+            // Clear only once the audition's sample has been discarded, or after 1 s if it never comes.
+            if drainLatencies(keep: false) > 0 || MonotonicClock.now() - lastAudition >= 1 { auditionedSinceDrain = false }
         }
         mixer.collectRetired(now: MonotonicClock.now())
         let velocity = pipeline.lastVelocity

@@ -44,7 +44,10 @@ final class MotionSensor: @unchecked Sendable {
     private let stopRequested = Atomic<Bool>(false)
     private let filterResetRequested = Atomic<Bool>(false)
     private let lastSampleBits = Atomic<UInt64>(0)
+    private let handlerVersion = Atomic<Int>(0)
     // Sensor-thread confined.
+    private var cachedHandler: (@Sendable (Double) -> Void)?
+    private var cachedVersion = -1
     private var filter = ImpactFilter()
     private var lastSampleTime = 0.0
     private var devices: [IOHIDDevice] = []
@@ -56,7 +59,10 @@ final class MotionSensor: @unchecked Sendable {
     /// Called on the sensor thread with each sample's time, after it is in the ring.
     var onSample: (@Sendable (Double) -> Void)? {
         get { state.withLock { $0.handler } }
-        set { state.withLock { $0.handler = newValue } }
+        set {
+            state.withLock { $0.handler = newValue }
+            handlerVersion.add(1, ordering: .releasing)
+        }
     }
 
     var isRunning: Bool { state.withLock { $0.running } }
@@ -210,13 +216,20 @@ final class MotionSensor: @unchecked Sendable {
         }
         // HID report timestamps are mach ticks.
         let time = timestamp != 0 ? MonotonicClock.seconds(fromMachTicks: timestamp) : MonotonicClock.now()
-        if filterResetRequested.exchange(false, ordering: .acquiring) || time - lastSampleTime > Self.restartGap {
+        let resetRequested = filterResetRequested.load(ordering: .relaxed) && filterResetRequested.exchange(false, ordering: .acquiring)
+        if resetRequested || time - lastSampleTime > Self.restartGap {
             filter = ImpactFilter()
         }
         lastSampleTime = time
         ring.append(time: time, impact: filter.process(AccelSample(time: time, x: axis(0), y: axis(1), z: axis(2))))
         lastSampleBits.store(time.bitPattern, ordering: .relaxed)
-        state.withLock { $0.handler }?(time)
+        // Re-reads the handler only when it changed, so a sample takes no lock.
+        let version = handlerVersion.load(ordering: .acquiring)
+        if version != cachedVersion {
+            cachedHandler = state.withLock { $0.handler }
+            cachedVersion = version
+        }
+        cachedHandler?(time)
     }
 }
 

@@ -93,7 +93,6 @@ enum BenchMode {
     static var isRequested: Bool { CommandLine.arguments.contains("--bench") }
 
     private static var failures = 0
-    private static var lead = 0.0
 
     static func run() async -> Int32 {
         setvbuf(stdout, nil, _IOLBF, 0)
@@ -123,7 +122,7 @@ enum BenchMode {
         try? await Task.sleep(for: .milliseconds(500))
         let rate = rig.engine.sampleRate, frames = rig.engine.ioBufferFrames
         let buffer = Double(frames) / rate
-        lead = rig.engine.stats.lead
+        let lead = rig.engine.stats.lead
         print(String(format: "engine: %.0f Hz, I/O buffer %d frames (%.2f ms), render lead %.2f ms (output host time minus render start)",
                      rate, frames, buffer * 1000, lead * 1000))
         if let hw = SystemAudio.outputHardwareLatencyFrames {
@@ -142,12 +141,45 @@ enum BenchMode {
         rig.pipeline.update(settings: settings, bank: bank, sensorAvailable: false)
         let idle = await cpuPercent { try? await Task.sleep(for: .seconds(seconds)) }
 
-        let sensorIdle: Double
+        let syntheticIdle: Double
         do {
             let sensor = SyntheticSensor(ring: rig.ring, pipeline: rig.pipeline)
             sensor.start()
-            sensorIdle = await cpuPercent { try? await Task.sleep(for: .seconds(seconds)) }
+            syntheticIdle = await cpuPercent { try? await Task.sleep(for: .seconds(seconds)) }
             sensor.stop()
+        }
+
+        // The real MotionSensor, wired as AppController wires it; it needs no Input Monitoring.
+        var realIdle: Double?, realSensorOnly: Double?, realRate = 0.0, realError: String?
+        do {
+            settings.hitStrengthEnabled = true
+            rig.pipeline.update(settings: settings, bank: bank, sensorAvailable: true)
+            let sensor = MotionSensor(ring: rig.ring)
+            let pipeline = rig.pipeline
+            let samples = Atomic<Int>(0)
+            sensor.onSample = { _ in
+                samples.add(1, ordering: .relaxed)
+                pipeline.tick(now: MonotonicClock.now())
+            }
+            do {
+                try sensor.start()
+                try? await Task.sleep(for: .seconds(1))
+                let n0 = samples.load(ordering: .relaxed), t0 = MonotonicClock.now()
+                realIdle = await cpuPercent { try? await Task.sleep(for: .seconds(seconds)) }
+                realRate = Double(samples.load(ordering: .relaxed) - n0) / (MonotonicClock.now() - t0)
+                rig.engine.stop()
+                try? await Task.sleep(for: .milliseconds(300))
+                realSensorOnly = await cpuPercent { try? await Task.sleep(for: .seconds(seconds)) }
+                sensor.stop()
+                try rig.engine.start()
+                try? await Task.sleep(for: .milliseconds(300))
+            } catch {
+                realError = "\(error)"
+                sensor.stop()
+                if !rig.engine.isRunning { try? rig.engine.start() }
+            }
+            settings.hitStrengthEnabled = false
+            rig.pipeline.update(settings: settings, bank: bank, sensorAvailable: false)
         }
 
         _ = rig.drainLatencies()
@@ -166,14 +198,25 @@ enum BenchMode {
         let overruns = rig.engine.stats.overruns.load(ordering: .relaxed) - overruns0
         rig.engine.stop()
 
-        let offBudget = 0.003 + buffer, onBudget = 0.008 + 0.003 + buffer
-        latencyLine("latency p99, hit strength off", off.latencies, budget: offBudget)
-        latencyLine("latency p99, hit strength on", on.latencies, budget: onBudget)
+        // Ruling: judged to the start of the render cycle that first renders the sound.
+        let minLead = rig.engine.stats.minLead
+        print(String(format: "render-cycle start = output host time minus the smallest render lead seen (%.2f ms)", minLead * 1000))
+        let offRender = off.latencies.map { $0 - minLead }, onRender = on.latencies.map { $0 - minLead }
+        latencyLine("latency p99, key event to render-cycle start, hit strength off", offRender, budget: 0.003 + buffer)
+        latencyLine("latency p99, key event to render-cycle start, hit strength on", onRender, budget: 0.008 + 0.003 + buffer)
         // Presses wait for the 8 ms window, releases don't; the gap between them is unambiguous.
-        info("hit strength on, presses only", on.latencies.filter { $0 >= 0.008 })
-        info("hit strength on, releases only", on.latencies.filter { $0 < 0.008 })
-        cpuLine("idle CPU, engine running", idle, budget: 1.0)
-        cpuLine("idle CPU, engine + 800 Hz sensor", sensorIdle, budget: 1.0)
+        info("key event to render-cycle start, hit strength on, presses only", onRender.filter { $0 >= 0.008 })
+        info("key event to render-cycle start, hit strength on, releases only", onRender.filter { $0 < 0.008 })
+        info("key event to output time (what you hear, as the live readout), hit strength off", off.latencies)
+        info("key event to output time (what you hear, as the live readout), hit strength on", on.latencies)
+        cpuLine("idle CPU, engine running (hit strength off)", idle, budget: 1.0)
+        cpuLine("idle CPU, engine + synthetic 800 Hz sensor", syntheticIdle, budget: 1.0)
+        if let realIdle, let realSensorOnly {
+            cpuLine(String(format: "idle CPU, engine + real sensor (%.0f Hz)", realRate), realIdle, budget: 1.0)
+            print(String(format: "info idle CPU, real sensor only, engine stopped: %.2f%% of a core (not checked)", realSensorOnly))
+        } else {
+            print("SKIP idle CPU, engine + real sensor: \(realError ?? "no sensor")")
+        }
         cpuLine("typing CPU, hit strength off", off.cpu, budget: 3.0)
         cpuLine("typing CPU, hit strength on", on.cpu, budget: 3.0)
         let mb = Double(footprint) / 1_048_576
@@ -266,16 +309,15 @@ enum BenchMode {
         let sorted = values.sorted()
         guard !sorted.isEmpty else { return check(false, "\(name): no latency samples") }
         let p99 = rank(sorted, 0.99)
-        check(p99 <= budget, String(format: "%@ %.2f ms (budget %.2f ms; p99 minus lead %.2f ms, p50 %.2f ms, max %.2f ms, n=%d)",
-                                    name, p99 * 1000, budget * 1000, (p99 - lead) * 1000, rank(sorted, 0.5) * 1000,
-                                    sorted.last! * 1000, sorted.count))
+        check(p99 <= budget, String(format: "%@ %.2f ms (budget %.2f ms; p50 %.2f ms, max %.2f ms, n=%d)",
+                                    name, p99 * 1000, budget * 1000, rank(sorted, 0.5) * 1000, sorted.last! * 1000, sorted.count))
     }
 
     private static func info(_ name: String, _ values: [Double]) {
         let sorted = values.sorted()
         guard !sorted.isEmpty else { return print("info \(name): no samples") }
-        print(String(format: "info %@: p99 %.2f ms, p50 %.2f ms, n=%d (not checked)",
-                     name, rank(sorted, 0.99) * 1000, rank(sorted, 0.5) * 1000, sorted.count))
+        print(String(format: "info %@: p99 %.2f ms, p50 %.2f ms, max %.2f ms, n=%d (not checked)",
+                     name, rank(sorted, 0.99) * 1000, rank(sorted, 0.5) * 1000, sorted.last! * 1000, sorted.count))
     }
 
     private static func cpuLine(_ name: String, _ percent: Double, budget: Double) {

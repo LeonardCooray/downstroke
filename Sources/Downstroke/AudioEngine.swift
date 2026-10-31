@@ -11,9 +11,12 @@ final class RenderStats: Sendable {
     // Output host time minus the time the render started, from the latest render.
     let leadBits = Atomic<UInt64>(0)
     let worstBits = Atomic<UInt64>(0)
+    let minLeadBits = Atomic<UInt64>(Double.infinity.bitPattern)
 
     var lead: Double { Double(bitPattern: leadBits.load(ordering: .relaxed)) }
     var worstRender: Double { Double(bitPattern: worstBits.load(ordering: .relaxed)) }
+    /// Smallest lead seen; subtracting it from an output-time latency bounds the render-time latency from above.
+    var minLead: Double { Double(bitPattern: minLeadBits.load(ordering: .relaxed)) }
 }
 
 /// Hosts the VoiceMixer in one AVAudioSourceNode at the output device's rate.
@@ -124,7 +127,9 @@ final class AudioEngine {
             let elapsed = MonotonicClock.seconds(fromMachTicks: mach_absolute_time() &- start)
             if elapsed > Double(frames) / sampleRate / 2 { stats.overruns.add(1, ordering: .relaxed) }
             if elapsed > stats.worstRender { stats.worstBits.store(elapsed.bitPattern, ordering: .relaxed) }
-            stats.leadBits.store((host - now).bitPattern, ordering: .relaxed)
+            let lead = host - now
+            stats.leadBits.store(lead.bitPattern, ordering: .relaxed)
+            if lead < stats.minLead { stats.minLeadBits.store(lead.bitPattern, ordering: .relaxed) }
             stats.renders.add(1, ordering: .relaxed)
             return noErr
         }

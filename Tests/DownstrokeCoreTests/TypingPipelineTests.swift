@@ -218,3 +218,12 @@ private struct Rig {
     rig.pipeline.keyEvent(press(at: 1.1), now: 1.1)
     #expect(rig.pipeline.lastVelocity == 0.5)
 }
+
+@Test func turningSensingOffFlushesAndClearsPending() {
+    let rig = Rig()
+    rig.pipeline.keyEvent(press(at: 1.0), now: 1.0)
+    #expect(rig.pipeline.hasPending)
+    rig.pipeline.update(settings: DownstrokeSettings(), bank: sharedBank, sensorAvailable: false)
+    #expect(!rig.pipeline.hasPending)
+    #expect(rig.slots() == [.press(.medium), .press(.hard)])
+}

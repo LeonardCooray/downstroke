@@ -22,6 +22,8 @@ public final class TypingPipeline: @unchecked Sendable {
     private let queue: TriggerQueue
     private let ring: SampleRing?
     private let state: Mutex<State>
+    // Mirrors `!pending.isEmpty`, written under the lock, so idle ticks skip it.
+    private let pendingFlag = Atomic<Bool>(false)
 
     public init(queue: TriggerQueue, ring: SampleRing?, random: sending any RandomNumberGenerator = SystemRandomNumberGenerator()) {
         self.queue = queue
@@ -36,6 +38,7 @@ public final class TypingPipeline: @unchecked Sendable {
             s.bank = bank
             s.sensorAvailable = sensorAvailable
             if !sensing(s) { flushAll(&s) }
+            publishPending(s)
         }
     }
 
@@ -62,20 +65,23 @@ public final class TypingPipeline: @unchecked Sendable {
             } else {
                 s.pending.append(e)
                 resolve(now: now, &s)
+                publishPending(s)
             }
         }
     }
 
     /// Sensor thread after each sample, and a 1 ms fallback timer.
     public func tick(now: Double) {
+        guard pendingFlag.load(ordering: .acquiring) else { return }
         state.withLock { s in
             guard !s.pending.isEmpty else { return }
             resolve(now: now, &s)
+            publishPending(s)
         }
     }
 
     /// True while a press waits for its hit window; drives the fallback tick timer.
-    public var hasPending: Bool { state.withLock { !$0.pending.isEmpty } }
+    public var hasPending: Bool { pendingFlag.load(ordering: .acquiring) }
 
     /// Velocity of the latest played press, nil before the first.
     public var lastVelocity: Float? { state.withLock { $0.lastVelocity } }
@@ -88,6 +94,10 @@ public final class TypingPipeline: @unchecked Sendable {
             let e = KeyEvent(time: MonotonicClock.now(), keyCode: 0, isRelease: false, isModifier: false)
             for t in s.planner.plan(e, velocity: 0.625, bank: boardBank, settings: settings) { _ = queue.push(t) }
         }
+    }
+
+    private func publishPending(_ s: State) {
+        pendingFlag.store(!s.pending.isEmpty, ordering: .releasing)
     }
 
     private func sensing(_ s: State) -> Bool {

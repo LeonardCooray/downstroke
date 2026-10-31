@@ -104,6 +104,7 @@ final class AppController: ObservableObject {
     let ring = SampleRing()
     let mixer: VoiceMixer
     let engine: AudioEngine
+    let idler: EngineIdler
     let pipeline: TypingPipeline
     private let store: SettingsStore
     private let tap = KeyTap()
@@ -132,13 +133,16 @@ final class AppController: ObservableObject {
     // The bank the pipeline holds, kept when the selected board's bank fails to build.
     private var pipelineBank: SampleBank?
 
-    init(defaults: UserDefaults = .standard, loginItems: any LoginItemService = MainAppLoginItem()) {
+    /// `engineIdleTimeout`: seconds without a key, audition or sound before the engine pauses.
+    init(defaults: UserDefaults = .standard, loginItems: any LoginItemService = MainAppLoginItem(),
+         engineIdleTimeout: Double = 60) {
         store = SettingsStore(defaults: defaults)
         settings = store.settings
         self.loginItems = loginItems
         loginStatus = loginItems.status
         mixer = VoiceMixer(queue: queue)
         engine = AudioEngine(mixer: mixer)
+        idler = EngineIdler(engine: engine, mixer: mixer, timeout: engineIdleTimeout)
         pipeline = TypingPipeline(queue: queue, ring: ring)
         sensor = MotionSensor(ring: ring)
         ticker = PendingTicker(pipeline: pipeline)
@@ -155,12 +159,10 @@ final class AppController: ObservableObject {
         _ = bank(for: settings.boardID)
         loadBanks(at: bankRate)
 
-        tap.onEvent = { [pipeline, ticker] e in
-            pipeline.keyEvent(e, now: MonotonicClock.now())
-            ticker.keyHandled()
-        }
+        tap.onEvent = EngineIdler.keyHandler(pipeline: pipeline, ticker: ticker, idler: idler)
         sensor.onSample = { [pipeline] _ in pipeline.tick(now: MonotonicClock.now()) }
         engine.onReconfigure = { [weak self] in self?.engineReconfigured() }
+        idler.onWake = { [weak self] error in self?.engineError = error.map { "\($0)" } }
         frontmost.onChange = { [weak self] _ in self?.contextChanged() }
         SystemAudio.observe { [weak self] in self?.contextChanged() }
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
@@ -262,10 +264,11 @@ final class AppController: ObservableObject {
         mixer.setMasterGain(settings.volume)
         updatePipeline(bank(for: settings.boardID))
         if settings.enabled {
-            startEngine()
+            // A settings change leaves an idle-paused engine paused; the next key wakes it.
+            if !engine.isPaused { startEngine() }
             startTap()
         } else {
-            if MonotonicClock.now() >= auditionUntil { engine.stop() }
+            if MonotonicClock.now() >= auditionUntil { idler.stop() }
             tap.stop()
             listening = false
         }
@@ -291,7 +294,7 @@ final class AppController: ObservableObject {
 
     private func startEngine() {
         do {
-            try engine.start()
+            try idler.start()
             engineError = nil
         } catch {
             engineError = "\(error)"
@@ -390,10 +393,17 @@ final class AppController: ObservableObject {
             updatePipeline()
         }
         if settings.enabled && !tap.isRunning && KeyTap.hasPermission { startTap() }
-        if !settings.enabled && engine.isRunning && MonotonicClock.now() >= auditionUntil && mixer.activeVoices == 0 {
-            engine.stop()
+        if settings.enabled {
+            idler.tick(now: MonotonicClock.now())
+        } else if engine.isRunning && MonotonicClock.now() >= auditionUntil && mixer.activeVoices == 0 {
+            idler.stop()
         }
     }
+
+    #if DEBUG
+    /// Delivers `e` through the key tap's own handler, on the caller's thread.
+    nonisolated func simulateKeyEvent(_ e: KeyEvent) { tap.onEvent?(e) }
+    #endif
 
     // Falls back to the pipeline's current bank, so settings still land when a bank fails to build.
     private func updatePipeline(_ bank: SampleBank? = nil) {

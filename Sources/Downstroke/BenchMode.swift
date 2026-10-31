@@ -3,6 +3,11 @@ import DownstrokeCore
 import Foundation
 import Synchronization
 
+struct BenchError: Error, CustomStringConvertible {
+    var description: String
+    init(_ description: String) { self.description = description }
+}
+
 struct MissingBoard: Error, CustomStringConvertible {
     var id: String
     var description: String { "no bundled board \(id)" }
@@ -17,15 +22,19 @@ final class AudioRig {
     let ring = SampleRing()
     let mixer: VoiceMixer
     let engine: AudioEngine
+    let idler: EngineIdler
     let pipeline: TypingPipeline
     let ticker: PendingTicker
     let boards: [Board]
     /// Defaults read from the isolated suite, never the app's own domain.
     let settings: DownstrokeSettings
+    private var idleTimer: Timer?
 
-    init() {
+    /// `idleTimeout` as AppController's; the 4 Hz idle check runs only after `startIdleChecks()`.
+    init(idleTimeout: Double = 60) {
         mixer = VoiceMixer(queue: queue)
         engine = AudioEngine(mixer: mixer)
+        idler = EngineIdler(engine: engine, mixer: mixer, timeout: idleTimeout)
         pipeline = TypingPipeline(queue: queue, ring: ring)
         ticker = PendingTicker(pipeline: pipeline)
         boards = BundledPacks.load().0
@@ -36,6 +45,17 @@ final class AudioRig {
     func bank(_ id: String) throws -> SampleBank {
         guard let board = boards.first(where: { $0.id == id }) else { throw MissingBoard(id: id) }
         return try SampleBank(board: board, sampleRate: engine.sampleRate)
+    }
+
+    /// The key tap's handler, wired as AppController wires it.
+    var keyHandler: @Sendable (KeyEvent) -> Void { EngineIdler.keyHandler(pipeline: pipeline, ticker: ticker, idler: idler) }
+
+    /// AppController's 4 Hz refresh, idle check only.
+    func startIdleChecks() {
+        guard idleTimer == nil else { return }
+        idleTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.idler.tick(now: MonotonicClock.now()) }
+        }
     }
 
     func drainLatencies() -> [Double] {
@@ -87,6 +107,11 @@ enum BenchMode {
     nonisolated static let keysPerSecond = 15.0
     nonisolated static let seconds = 10.0
     nonisolated static let holdTime = 0.04
+    // Stand-in for the app's 60 s idle timeout, and first-key samples per idle mode.
+    static let idleTimeout = 1.0
+    static let wakeSamples = 12
+    // A key straight after stop() finds the device still warm (about 5 ms); from 1 s on it takes the full restart.
+    static let pausedDwell = 1.0
     // Letters, space and return; modifiers don't change the cost.
     nonisolated static let keyCodes: [UInt16] = [17, 4, 14, 49, 12, 32, 34, 8, 40, 49, 11, 15, 31, 13, 45, 49, 3, 31, 7, 36]
 
@@ -97,7 +122,11 @@ enum BenchMode {
     static func run() async -> Int32 {
         setvbuf(stdout, nil, _IOLBF, 0)
         print("Downstroke bench")
-        let rig = AudioRig()
+        // The engine only idles in the phases that measure it.
+        let rig = AudioRig(idleTimeout: .infinity)
+        rig.startIdleChecks()
+        let chosenMode = rig.engine.idleMode
+        let otherMode: AudioEngine.IdleMode = chosenMode == .pause ? .stop : .pause
         var settings = rig.settings
         settings.enabled = true
 
@@ -114,7 +143,7 @@ enum BenchMode {
             return 1
         }
 
-        do { try rig.engine.start() } catch {
+        do { try rig.idler.start() } catch {
             check(false, "engine starts (\(error))")
             return 1
         }
@@ -150,7 +179,7 @@ enum BenchMode {
         }
 
         // The real MotionSensor, wired as AppController wires it; it needs no Input Monitoring.
-        var realIdle: Double?, realSensorOnly: Double?, realRate = 0.0, realError: String?
+        var realRunning: Double?, realPaused: Double?, realOther: Double?, realRate = 0.0, realError: String?
         do {
             settings.hitStrengthEnabled = true
             rig.pipeline.update(settings: settings, bank: bank, sensorAvailable: true)
@@ -165,19 +194,25 @@ enum BenchMode {
                 try sensor.start()
                 try? await Task.sleep(for: .seconds(1))
                 let n0 = samples.load(ordering: .relaxed), t0 = MonotonicClock.now()
-                realIdle = await cpuPercent { try? await Task.sleep(for: .seconds(seconds)) }
+                realRunning = await cpuPercent { try? await Task.sleep(for: .seconds(seconds)) }
                 realRate = Double(samples.load(ordering: .relaxed) - n0) / (MonotonicClock.now() - t0)
-                rig.engine.stop()
-                try? await Task.sleep(for: .milliseconds(300))
-                realSensorOnly = await cpuPercent { try? await Task.sleep(for: .seconds(seconds)) }
+                // As the app after its idle timeout, then with the other idle mode for comparison.
+                for mode in [chosenMode, otherMode] {
+                    rig.engine.idleMode = mode
+                    try rig.idler.start()
+                    guard await idlePause(rig) else { throw BenchError("engine did not pause after \(idleTimeout) s idle (\(mode.name))") }
+                    let cpu = await cpuPercent { try? await Task.sleep(for: .seconds(seconds)) }
+                    if mode == chosenMode { realPaused = cpu } else { realOther = cpu }
+                }
                 sensor.stop()
-                try rig.engine.start()
-                try? await Task.sleep(for: .milliseconds(300))
             } catch {
                 realError = "\(error)"
                 sensor.stop()
-                if !rig.engine.isRunning { try? rig.engine.start() }
             }
+            rig.idler.timeout = .infinity
+            rig.engine.idleMode = chosenMode
+            if !rig.engine.isRunning { try? rig.idler.start() }
+            try? await Task.sleep(for: .milliseconds(300))
             settings.hitStrengthEnabled = false
             rig.pipeline.update(settings: settings, bank: bank, sensorAvailable: false)
         }
@@ -193,6 +228,12 @@ enum BenchMode {
         let on = await typing(rig, settings: settings, bank: bank, sensor: sensor)
         sensor.stop()
 
+        // First key after an idle pause, hit strength off so the number is the restart alone.
+        settings.hitStrengthEnabled = false
+        rig.pipeline.update(settings: settings, bank: bank, sensorAvailable: false)
+        let wakeChosen = await firstKeys(rig, mode: chosenMode)
+        let wakeOther = await firstKeys(rig, mode: otherMode)
+
         footprint = max(footprint, physFootprint())
         let renders = rig.engine.stats.renders.load(ordering: .relaxed) - renders0
         let overruns = rig.engine.stats.overruns.load(ordering: .relaxed) - overruns0
@@ -207,12 +248,23 @@ enum BenchMode {
         info("key event to output time (what you hear, as the live readout), hit strength off", off.latencies)
         info("key event to output time (what you hear, as the live readout), hit strength on", on.latencies)
         print("info stale triggers dropped: \(rig.mixer.staleTriggers) (latency samples are key presses only, one per press)")
+        let first = "first key after an idle pause"
+        latencyLine("\(first), key event to render-cycle start (hit strength off, idled with \(chosenMode.name))",
+                    wakeChosen.latencies.map { $0 - minLead }, budget: 0.050)
+        info("\(first), key event to output time, \(chosenMode.name)", wakeChosen.latencies)
+        info("\(first), engine start() call, \(chosenMode.name)", wakeChosen.starts)
+        info("\(first), key event to render-cycle start, \(otherMode.name) instead", wakeOther.latencies.map { $0 - minLead })
+        info("\(first), key event to output time, \(otherMode.name) instead", wakeOther.latencies)
+        info("\(first), engine start() call, \(otherMode.name) instead", wakeOther.starts)
+        print("info idle pauses and wakes: \(wakeChosen.wakes) with \(chosenMode.name), \(wakeOther.wakes) with \(otherMode.name); stale triggers dropped now \(rig.mixer.staleTriggers)")
         cpuLine("idle CPU, engine running (hit strength off)", idle, budget: 1.0)
         print(String(format: "info idle CPU, engine + synthetic 800 Hz sensor: %.2f%% of a core (not checked)", syntheticIdle))
-        if let realIdle, let realSensorOnly, realRate >= 700 {
+        if let realRunning, let realPaused, let realOther, realRate >= 700 {
             // Ruling: hit strength on has its own idle budget, set from the measured HID floor.
-            cpuLine(String(format: "idle CPU, engine + real sensor (%.0f Hz), hit-strength-on idle budget", realRate), realIdle, budget: 1.5)
-            print(String(format: "info idle CPU, real sensor only, engine stopped: %.2f%% of a core (not checked)", realSensorOnly))
+            cpuLine(String(format: "idle CPU, engine + real sensor (%.0f Hz), engine idle-paused (%@) after %.0f s, hit-strength-on idle budget",
+                           realRate, chosenMode.name, idleTimeout), realPaused, budget: 1.5)
+            print(String(format: "info idle CPU, engine running + real sensor: %.2f%% of a core (not checked; before the idle pause)", realRunning))
+            print(String(format: "info idle CPU, real sensor, engine idled with %@ instead: %.2f%% of a core (not checked)", otherMode.name, realOther))
         } else {
             let reason = realError ?? String(format: "sensor delivered %.0f Hz, below 700 Hz", realRate)
             print("SKIP idle CPU, engine + real sensor: \(reason); the hit-strength-on idle budget (1.5%) was not checked")
@@ -235,11 +287,11 @@ enum BenchMode {
 
     private static func typing(_ rig: AudioRig, settings: DownstrokeSettings, bank: SampleBank, sensor: SyntheticSensor?) async -> Run {
         _ = rig.drainLatencies()
-        let pipeline = rig.pipeline, ticker = rig.ticker
+        let handler = rig.keyHandler
         let cpu = await cpuPercent {
             await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
                 let thread = Thread {
-                    feedKeys(pipeline: pipeline, ticker: ticker, sensor: sensor)
+                    feedKeys(handler: handler, sensor: sensor)
                     done.resume()
                 }
                 thread.qualityOfService = .userInteractive
@@ -251,7 +303,7 @@ enum BenchMode {
     }
 
     // Runs on its own thread, as the key tap does.
-    private nonisolated static func feedKeys(pipeline: TypingPipeline, ticker: PendingTicker, sensor: SyntheticSensor?) {
+    private nonisolated static func feedKeys(handler: @Sendable (KeyEvent) -> Void, sensor: SyntheticSensor?) {
         let start = MonotonicClock.now() + 0.05
         let count = Int(keysPerSecond * seconds)
         var events: [(at: Double, index: Int, release: Bool)] = []
@@ -267,9 +319,59 @@ enum BenchMode {
             let now = MonotonicClock.now()
             if !event.release { sensor?.lastPressBits.store(now.bitPattern, ordering: .relaxed) }
             let code = keyCodes[event.index % keyCodes.count]
-            pipeline.keyEvent(KeyEvent(time: now, keyCode: code, isRelease: event.release, isModifier: false), now: now)
-            ticker.keyHandled()
+            handler(KeyEvent(time: now, keyCode: code, isRelease: event.release, isModifier: false))
         }
+    }
+
+    private struct Wakes {
+        var latencies: [Double] = []
+        var starts: [Double] = []
+        var wakes = 0
+    }
+
+    // Each sample: wait for the idle pause, press once on a key-tap-like thread, take that press's latency.
+    private static func firstKeys(_ rig: AudioRig, mode: AudioEngine.IdleMode) async -> Wakes {
+        var result = Wakes()
+        let chosen = rig.engine.idleMode
+        rig.engine.idleMode = mode
+        if !rig.engine.isRunning { try? rig.idler.start() }
+        let wakes0 = rig.idler.wakes
+        let handler = rig.keyHandler
+        _ = rig.drainLatencies()
+        for _ in 0..<wakeSamples {
+            guard await idlePause(rig) else { break }
+            try? await Task.sleep(for: .seconds(pausedDwell))
+            let thread = Thread {
+                let now = MonotonicClock.now()
+                handler(KeyEvent(time: now, keyCode: 0, isRelease: false, isModifier: false))
+            }
+            thread.qualityOfService = .userInteractive
+            thread.start()
+            let deadline = MonotonicClock.now() + 1
+            var sample: [Double] = []
+            while sample.isEmpty && MonotonicClock.now() < deadline {
+                try? await Task.sleep(for: .milliseconds(5))
+                sample = rig.drainLatencies()
+            }
+            result.latencies += sample
+            if let wake = rig.idler.lastWake { result.starts.append(wake.start) }
+        }
+        result.wakes = rig.idler.wakes - wakes0
+        rig.idler.timeout = .infinity
+        rig.engine.idleMode = chosen
+        if !rig.engine.isRunning { try? rig.idler.start() }
+        return result
+    }
+
+    /// Sets the short idle timeout and waits up to 3 s for the engine to pause.
+    private static func idlePause(_ rig: AudioRig) async -> Bool {
+        rig.idler.timeout = idleTimeout
+        let deadline = MonotonicClock.now() + idleTimeout + 2
+        while rig.idler.status != .paused {
+            if MonotonicClock.now() > deadline { return false }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return true
     }
 
     nonisolated static func sleep(until time: Double) {

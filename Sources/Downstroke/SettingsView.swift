@@ -353,6 +353,7 @@ struct DiagnosticsSettings: View {
                 row("Motion sensor", s.sensor, health: s.sensorHealth)
             }
             Section("Audio output") {
+                row("Engine", s.engine, health: s.engineHealth)
                 row("Device", s.device)
                 row("Bluetooth", s.bluetooth ? "Yes, adds delay" : "No", health: s.bluetooth ? .warning : nil)
                 row("Sample rate", s.sampleRateText)

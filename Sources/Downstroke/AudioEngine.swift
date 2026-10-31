@@ -24,17 +24,27 @@ final class RenderStats: Sendable {
 final class AudioEngine {
     static let requestedBufferFrames: UInt32 = 128
 
+    /// How `pause()` idles the engine; both resume with `start()` and measured the same (see the bench).
+    enum IdleMode {
+        case pause, stop
+
+        var name: String { self == .pause ? "pause()" : "stop() + prepare()" }
+    }
+
+    private enum Want { case off, paused, running }
+
     let stats = RenderStats()
     private let mixer: VoiceMixer
     private var engine = AVAudioEngine()
     private var observer: (any NSObjectProtocol)?
-    private var wantsRunning = false
+    private var want = Want.off
 
     private(set) var sampleRate: Double = 48000
     private(set) var ioBufferFrames = Int(requestedBufferFrames)
     private(set) var lastError: (any Error)?
     /// Main thread, after every rebuild (output device or format change).
     var onReconfigure: (() -> Void)?
+    var idleMode = IdleMode.stop
 
     init(mixer: VoiceMixer) {
         self.mixer = mixer
@@ -45,9 +55,19 @@ final class AudioEngine {
 
     var isRunning: Bool { engine.isRunning }
 
+    /// Paused for idleness: not rendering, and `start()` resumes it.
+    var isPaused: Bool { want == .paused && !engine.isRunning }
+
     func start() throws {
-        wantsRunning = true
+        let resuming = want == .paused
+        want = .running
         guard !engine.isRunning else { return }
+        // A device change can go unannounced while paused; resume on a matching engine.
+        if resuming, outputRateChanged {
+            reconfigure()
+            if !engine.isRunning, let lastError { throw lastError }
+            return
+        }
         do {
             try run()
             lastError = nil
@@ -57,9 +77,26 @@ final class AudioEngine {
         }
     }
 
+    /// Idles a running engine (or one whose start failed) until the next `start()`.
+    func pause() {
+        guard want == .running else { return }
+        want = .paused
+        switch idleMode {
+        case .pause: engine.pause()
+        case .stop:
+            engine.stop()
+            engine.prepare()
+        }
+    }
+
     func stop() {
-        wantsRunning = false
+        want = .off
         engine.stop()
+    }
+
+    private var outputRateChanged: Bool {
+        let rate = engine.outputNode.outputFormat(forBus: 0).sampleRate
+        return rate > 0 && rate != sampleRate
     }
 
     private func run() throws {
@@ -101,7 +138,8 @@ final class AudioEngine {
     private func reconfigure() {
         engine.stop()
         build()
-        if wantsRunning {
+        // A paused engine stays paused; the next start() runs the fresh one.
+        if want == .running {
             do {
                 try run()
                 lastError = nil

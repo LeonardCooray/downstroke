@@ -144,6 +144,8 @@ struct DiagnosticsSnapshot: Equatable {
     var tap = "Stopped"
     var sensor = "Off"
     var sensorHealth = Health.idle
+    var engine = "Off"
+    var engineHealth = Health.idle
     var device = "None"
     var bluetooth = false
     var sampleRate = 0.0
@@ -175,6 +177,7 @@ struct DiagnosticsSnapshot: Equatable {
             "Input Monitoring: \(permission ? "granted" : "not granted")",
             "Key tap: \(tap)",
             "Motion sensor: \(sensor)",
+            "Audio engine: \(engine)",
             "Output: \(device)\(bluetooth ? " (Bluetooth)" : "")",
             "Sample rate: \(sampleRateText)",
             "I/O buffer: \(ioText)",
@@ -221,6 +224,7 @@ final class DiagnosticsModel: ObservableObject {
         s.permission = KeyTap.hasPermission
         s.tap = c.listening ? "Listening" : !c.settings.enabled ? "Off" : c.permissionMissing ? "Waiting for permission" : "Stopped"
         (s.sensor, s.sensorHealth) = sensorText()
+        (s.engine, s.engineHealth) = Self.engineText(c.idler.status, enabled: c.settings.enabled)
         s.device = SystemAudio.outputDeviceName ?? "None"
         s.bluetooth = c.outputIsBluetooth
         s.sampleRate = c.engine.sampleRate
@@ -231,6 +235,14 @@ final class DiagnosticsModel: ObservableObject {
         s.voices = c.mixer.activeVoices
         s.problems = (c.engineError.map { ["Audio engine: \($0)"] } ?? []) + c.packErrors.map { "Sound pack: \($0)" }
         if s != snapshot { snapshot = s }
+    }
+
+    static func engineText(_ status: EngineIdler.Status, enabled: Bool) -> (String, DiagnosticsSnapshot.Health) {
+        switch status {
+        case .running: ("Running", .good)
+        case .paused: ("Paused (idle)", .idle)
+        case .off: ("Off", enabled ? .warning : .idle)
+        }
     }
 
     // Rate over the last second of ring appends.

@@ -44,6 +44,7 @@ enum DebugSelfTest {
             case "sensor-restart": await sensorRestart()
             case "audio": await audio()
             case "audio-reconfigure": await audioReconfigure()
+            case "engine-pause": await enginePause()
             case "mic": await mic()
             case "panel": await panel()
             case "panel-shots": await panelShots()
@@ -121,6 +122,139 @@ enum DebugSelfTest {
         let renders = rig.engine.stats.renders.load(ordering: .relaxed)
         await checkAuditionLatency(rig, bank, "audition after the change")
         check(rig.engine.stats.renders.load(ordering: .relaxed) > renders, "render block runs after the rebuild")
+    }
+
+    static func enginePause() async {
+        // Volume 0 and fixed strength: presses emit at once and stay silent; 1 s idle timeout.
+        guard let defaults = isolatedDefaults() else { return check(false, "isolated defaults suite") }
+        let seed = SettingsStore(defaults: defaults)
+        seed.settings.volume = 0
+        seed.settings.hitStrengthEnabled = false
+        seed.save()
+        let controller = AppController(defaults: defaults, loginItems: FakeLoginItem(), engineIdleTimeout: 1)
+        controller.start()
+        let idler = controller.idler, engine = controller.engine
+        let diagnostics = DiagnosticsModel(controller: controller)
+        func engineRow() -> String {
+            diagnostics.sample()
+            return diagnostics.snapshot.engine
+        }
+        func waitPaused(_ limit: Double = 3) async -> Double? {
+            await waitUntil(limit) { idler.status == .paused }
+        }
+        func pressAndMeasure(_ name: String) async {
+            // Long enough paused for the output device to need a full restart.
+            try? await Task.sleep(for: .seconds(1))
+            let count = controller.latencyCount, stale = controller.mixer.staleTriggers, renders = engine.stats.renders.load(ordering: .relaxed)
+            press { controller.simulateKeyEvent($0) }
+            let woke = await waitUntil(1) { controller.latencyCount > count }
+            check(woke != nil && engine.isRunning, "\(name): key wakes the engine and its press reaches the latency readout")
+            if let p50 = controller.latencyP50, count == 0 {
+                check(p50 > 0 && p50 < 0.25, String(format: "\(name): first key after the pause plays, late by %.2f ms (output time)", p50 * 1000))
+            }
+            if let wake = idler.lastWake {
+                print(String(format: "  wake hop to main %.2f ms, engine start %.2f ms", wake.hop * 1000, wake.start * 1000))
+            }
+            check(controller.mixer.staleTriggers == stale, "\(name): the first key is not dropped as stale")
+            check(engine.stats.renders.load(ordering: .relaxed) > renders, "\(name): render block runs again")
+        }
+
+        check(engine.isRunning && idler.status == .running, "engine running after start")
+        check(engineRow() == "Running", "Diagnostics engine row: Running")
+        if let t = await waitPaused() {
+            check(true, String(format: "engine pauses after 1 s idle with no voices (%.2f s after the wait began)", t))
+        } else {
+            return check(false, "engine pauses after 1 s idle with no voices")
+        }
+        check(!engine.isRunning, "paused engine is not rendering")
+        check(engineRow() == "Paused (idle)", "Diagnostics engine row: Paused (idle)")
+        controller.update { $0.stereoWidth = 0.3 }
+        check(idler.status == .paused, "a settings change leaves the paused engine paused")
+
+        await pressAndMeasure("after idle")
+        check(idler.wakes == 1, "one wake for one pause (\(idler.wakes))")
+        check(engineRow() == "Running", "Diagnostics engine row back to Running")
+
+        // A slowed, silent clip keeps a voice sounding well past the timeout.
+        guard await waitPaused() != nil else { return check(false, "engine pauses again") }
+        press { controller.simulateKeyEvent($0) }
+        guard await waitUntil(1, { engine.isRunning }) != nil,
+              let board = controller.boards.first(where: { $0.id == controller.settings.boardID }),
+              let bank = try? SampleBank(board: board, sampleRate: engine.sampleRate),
+              let clip = bank.presses(.alpha, .hard).first
+        else { return check(false, "engine wakes and a clip loads for the sounding-voice check") }
+        let rate = Float(Double(clip.frames) / engine.sampleRate / 3)
+        _ = controller.queue.push(Trigger(clip: clip, gain: 0, pan: 0, rate: rate, eventTime: MonotonicClock.now(), bankTag: bank.tag))
+        try? await Task.sleep(for: .milliseconds(2000))
+        check(engine.isRunning && controller.mixer.activeVoices > 0,
+              "no pause while a voice is sounding (\(controller.mixer.activeVoices) voices, 2 s after the last key)")
+        let ended = await waitPaused(4)
+        check(ended != nil && controller.mixer.activeVoices == 0, "pauses once the voice ends")
+        withExtendedLifetime(bank) {}
+
+        let boardID = controller.settings.boardID
+        let renders = engine.stats.renders.load(ordering: .relaxed)
+        controller.audition(boardID)
+        check(engine.isRunning && idler.status == .running, "audition wakes the paused engine before it queues")
+        let voiced = await waitUntil(0.3) { controller.mixer.activeVoices > 0 }
+        check(voiced != nil && engine.stats.renders.load(ordering: .relaxed) > renders, "the audition renders a voice")
+
+        guard await waitPaused(4) != nil else { return check(false, "engine pauses after the audition") }
+        let before = engine.engineIdentity
+        var reconfigures = 0
+        engine.onReconfigure = { reconfigures += 1 }
+        engine.simulateConfigurationChange()
+        try? await Task.sleep(for: .milliseconds(150))
+        check(reconfigures == 1 && engine.engineIdentity != before, "configuration change while paused rebuilds the engine")
+        check(idler.status == .paused && !engine.isRunning, "and it stays paused, not running")
+        await pressAndMeasure("after a configuration change while paused")
+        check(engine.sampleRate > 0 && engine.ioBufferFrames > 0, "rebuilt engine at \(Int(engine.sampleRate)) Hz, \(engine.ioBufferFrames) frames")
+
+        guard await waitPaused() != nil else { return check(false, "engine pauses before the disable check") }
+        controller.setEnabled(false)
+        check(idler.status == .off && engineRow() == "Off", "turning Downstroke off stops a paused engine (row: Off)")
+        let wakes = idler.wakes
+        press { controller.simulateKeyEvent($0) }
+        try? await Task.sleep(for: .milliseconds(300))
+        check(idler.wakes == wakes && idler.status == .off, "keys while off don't wake it")
+        controller.setEnabled(true)
+        check(idler.status == .running, "turning Downstroke on starts it")
+
+        // The sensor keeps streaming while the engine is paused.
+        controller.update { $0.hitStrengthEnabled = true }
+        if let t = await waitPaused() {
+            let streaming = await waitUntil(1.5) { controller.sensorStatus == .streaming }
+            if case .unavailable(let reason) = controller.sensorStatus {
+                print("SKIP sensor while paused: \(reason)")
+            } else {
+                check(streaming != nil && idler.status == .paused,
+                      String(format: "motion sensor streams while the engine is paused (paused after %.2f s)", t))
+            }
+        } else {
+            check(false, "engine pauses with hit strength on")
+        }
+        controller.setEnabled(false)
+        defaults.removePersistentDomain(forName: AudioRig.isolatedSuite)
+    }
+
+    /// Seconds until `condition` held, polling every 10 ms, or nil after `limit`.
+    private static func waitUntil(_ limit: Double, _ condition: () -> Bool) async -> Double? {
+        let start = MonotonicClock.now()
+        while !condition() {
+            if MonotonicClock.now() - start > limit { return nil }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        return MonotonicClock.now() - start
+    }
+
+    /// One key press on its own thread, as the tap delivers it.
+    private static func press(_ handler: @escaping @Sendable (KeyEvent) -> Void) {
+        let thread = Thread {
+            let now = MonotonicClock.now()
+            handler(KeyEvent(time: now, keyCode: 0, isRelease: false, isModifier: false))
+        }
+        thread.qualityOfService = .userInteractive
+        thread.start()
     }
 
     static func mic() async {
@@ -426,6 +560,7 @@ enum DebugSelfTest {
         check(settingsWindow.diagnostics.isActive && ticks >= 3, "diagnostics refresh while visible (\(ticks) ticks)")
         check(snap.sampleRate > 0 && snap.ioFrames > 0 && snap.device != "None",
               "diagnostics: \(snap.device), \(snap.sampleRateText), \(snap.ioText), sensor \(snap.sensor)")
+        check(snap.engine == "Running" && snap.report.contains("Audio engine: Running"), "diagnostics engine row: \(snap.engine)")
         settingsWindow.show(.sound)
         try? await Task.sleep(for: .milliseconds(300))
         let soundTicks = settingsWindow.diagnostics.ticks

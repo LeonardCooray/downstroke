@@ -54,6 +54,7 @@ public struct Hotkey: Codable, Equatable, Hashable, Sendable {
         if isReservedBySystem { return "\(displayString) is reserved by macOS" }
         if !isUsableGlobally { return "Add ⌃, ⌥ or ⌘" }
         if modifiers & (Self.control | Self.option) == 0 { return "Add ⌃ or ⌥ so apps keep their ⌘ shortcuts" }
+        if modifiers & (Self.control | Self.command) == 0 { return "Add ⌃ or ⌘ so ⌥ still types special characters" }
         return nil
     }
 }

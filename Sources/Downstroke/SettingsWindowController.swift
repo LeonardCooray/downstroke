@@ -27,10 +27,6 @@ enum SettingsTab: String, CaseIterable {
     }
 }
 
-extension Notification.Name {
-    static let downstrokeStopRecording = Notification.Name("DownstrokeStopRecording")
-}
-
 /// A muted or running app as the Apps tab shows it.
 struct AppInfo: Identifiable, Equatable {
     let id: String
@@ -82,10 +78,12 @@ final class SettingsModel: ObservableObject {
     @Published var licence: LicenceNotice?
 
     let controller: AppController
+    let recorder: HotkeyRecorderState
     private var observers: [any NSObjectProtocol] = []
 
     init(controller: AppController) {
         self.controller = controller
+        recorder = HotkeyRecorderState(controller: controller)
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             observers.append(center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
@@ -373,7 +371,10 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.moveToActiveSpace, .fullScreenAuxiliary]
         window.delegate = self
-        tabs.onSelect = { [weak self] in self?.updateDiagnostics() }
+        tabs.onSelect = { [weak self] in
+            self?.model.recorder.stop()
+            self?.updateDiagnostics()
+        }
         self.tabs = tabs
         self.window = window
         tabs.fitWindow(animated: false)
@@ -383,7 +384,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
 
     private func page(_ tab: SettingsTab) -> AnyView {
         switch tab {
-        case .general: AnyView(GeneralSettings(controller: controller))
+        case .general: AnyView(GeneralSettings(controller: controller, recorder: model.recorder))
         case .sound: AnyView(SoundSettings(controller: controller))
         case .apps: AnyView(AppsSettings(controller: controller, model: model))
         case .diagnostics: AnyView(DiagnosticsSettings(model: diagnostics, controller: controller))
@@ -397,16 +398,12 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         diagnostics.setActive(visible && selectedTab == .diagnostics)
     }
 
-    private func stopRecording() {
-        NotificationCenter.default.post(name: .downstrokeStopRecording, object: nil)
-    }
-
     func windowWillClose(_ notification: Notification) {
-        stopRecording()
+        model.recorder.stop()
         diagnostics.setActive(false)
     }
 
-    func windowDidResignKey(_ notification: Notification) { stopRecording() }
+    func windowDidResignKey(_ notification: Notification) { model.recorder.stop() }
 
     func windowDidChangeOcclusionState(_ notification: Notification) { updateDiagnostics() }
 }

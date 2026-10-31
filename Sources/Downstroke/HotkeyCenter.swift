@@ -21,13 +21,14 @@ final class HotkeyCenter {
 
     var isRegistered: Bool { ref != nil }
 
-    /// Replaces any previous registration; returns the Carbon status.
+    /// Replaces any previous registration; exclusive, so a combo another registration holds fails instead of double-firing.
     @discardableResult
-    func register(_ hotkey: Hotkey, handler: @escaping () -> Void) -> OSStatus {
+    func register(_ hotkey: Hotkey, exclusive: Bool = true, handler: @escaping () -> Void) -> OSStatus {
         unregister()
         var ref: EventHotKeyRef?
+        let options = exclusive ? OptionBits(kEventHotKeyExclusive) : 0
         let status = RegisterEventHotKey(hotkey.keyCode, hotkey.modifiers, EventHotKeyID(signature: Self.signature, id: id),
-                                         GetApplicationEventTarget(), 0, &ref)
+                                         GetApplicationEventTarget(), options, &ref)
         guard status == noErr, let ref else { return status == noErr ? OSStatus(eventInternalErr) : status }
         self.ref = ref
         Self.handlers[id] = handler

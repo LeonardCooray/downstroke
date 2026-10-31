@@ -38,15 +38,15 @@ extension AppController {
 
 struct GeneralSettings: View {
     @ObservedObject var controller: AppController
+    let recorder: HotkeyRecorderState
 
     var body: some View {
         SettingsPage {
             Section {
                 LabeledContent {
-                    HotkeyRecorder(
-                        hotkey: controller.settings.hotkey,
-                        onRecording: controller.setHotkeySuspended,
-                        onSet: { hotkey in controller.update { $0.hotkey = hotkey } })
+                    HotkeyRecorder(hotkey: controller.settings.hotkey, state: recorder) {
+                        controller.update { $0.hotkey = .defaultToggle }
+                    }
                 } label: {
                     Text("Turn Downstroke on or off")
                     Text("Works from any app.")
@@ -91,18 +91,29 @@ struct GeneralSettings: View {
     }
 }
 
-/// Uses an ObservableObject rather than @State: the Command Line Tools build can't load the SwiftUI macro plugin.
+/// Records a global shortcut from the key code and modifier flags only; never characters.
+/// An ObservableObject rather than @State: the Command Line Tools build can't load the SwiftUI macro plugin.
 @MainActor
-final class RecorderState: ObservableObject {
-    @Published var recording = false
-    @Published var problem: String?
-    var monitor: Any?
-    var onStop: (() -> Void)?
-    private var observer: (any NSObjectProtocol)?
+final class HotkeyRecorderState: ObservableObject {
+    @Published private(set) var recording = false
+    @Published private(set) var problem: String?
+    private var monitor: Any?
+    private unowned let controller: AppController
 
-    init() {
-        observer = NotificationCenter.default.addObserver(forName: .downstrokeStopRecording, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.stop() }
+    init(controller: AppController) {
+        self.controller = controller
+    }
+
+    var isMonitoring: Bool { monitor != nil }
+
+    func start() {
+        guard !recording else { return }
+        recording = true
+        problem = nil
+        controller.setHotkeySuspended(true)
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            self?.handle(keyCode: event.keyCode, flags: event.modifierFlags)
+            return nil
         }
     }
 
@@ -112,22 +123,41 @@ final class RecorderState: ObservableObject {
         problem = nil
         guard recording else { return }
         recording = false
-        onStop?()
+        controller.setHotkeySuspended(false)
+    }
+
+    func handle(keyCode: UInt16, flags: NSEvent.ModifierFlags) {
+        let modifiers = Self.carbonModifiers(flags)
+        if keyCode == UInt16(kVK_Escape) && modifiers == 0 { return stop() }
+        let candidate = Hotkey(keyCode: UInt32(keyCode), modifiers: modifiers)
+        if let problem = candidate.problem {
+            self.problem = "\(candidate.displayString): \(problem)"
+        } else {
+            controller.update { $0.hotkey = candidate }
+            stop()
+        }
+    }
+
+    static func carbonModifiers(_ flags: NSEvent.ModifierFlags) -> UInt32 {
+        var m: UInt32 = 0
+        if flags.contains(.command) { m |= Hotkey.command }
+        if flags.contains(.shift) { m |= Hotkey.shift }
+        if flags.contains(.option) { m |= Hotkey.option }
+        if flags.contains(.control) { m |= Hotkey.control }
+        return m
     }
 }
 
-/// Records a global shortcut from the key code and modifier flags only; never characters.
 struct HotkeyRecorder: View {
     let hotkey: Hotkey
-    let onRecording: (Bool) -> Void
-    let onSet: (Hotkey) -> Void
-    @StateObject private var state = RecorderState()
+    @ObservedObject var state: HotkeyRecorderState
+    let onReset: () -> Void
 
     var body: some View {
         VStack(alignment: .trailing, spacing: 4) {
             HStack(spacing: 6) {
                 if hotkey != Hotkey.defaultToggle && !state.recording {
-                    Button { onSet(Hotkey.defaultToggle) } label: {
+                    Button(action: onReset) {
                         Image(systemName: "arrow.uturn.backward")
                     }
                     .buttonStyle(.borderless)
@@ -138,7 +168,7 @@ struct HotkeyRecorder: View {
                     Button(action: state.stop) { label("Type shortcut…") }
                         .buttonStyle(.borderedProminent)
                 } else {
-                    Button(action: start) { label(hotkey.displayString) }
+                    Button(action: state.start) { label(hotkey.displayString) }
                         .buttonStyle(.bordered)
                 }
             }
@@ -153,37 +183,6 @@ struct HotkeyRecorder: View {
 
     private func label(_ text: String) -> some View {
         Text(text).frame(minWidth: 104)
-    }
-
-    private func start() {
-        state.recording = true
-        state.problem = nil
-        state.onStop = { onRecording(false) }
-        onRecording(true)
-        state.monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [state] event in
-            let modifiers = Self.carbonModifiers(event.modifierFlags)
-            if event.keyCode == UInt16(kVK_Escape) && modifiers == 0 {
-                state.stop()
-                return nil
-            }
-            let candidate = Hotkey(keyCode: UInt32(event.keyCode), modifiers: modifiers)
-            if let problem = candidate.problem {
-                state.problem = "\(candidate.displayString): \(problem)"
-            } else {
-                onSet(candidate)
-                state.stop()
-            }
-            return nil
-        }
-    }
-
-    static func carbonModifiers(_ flags: NSEvent.ModifierFlags) -> UInt32 {
-        var m: UInt32 = 0
-        if flags.contains(.command) { m |= Hotkey.command }
-        if flags.contains(.shift) { m |= Hotkey.shift }
-        if flags.contains(.option) { m |= Hotkey.option }
-        if flags.contains(.control) { m |= Hotkey.control }
-        return m
     }
 }
 

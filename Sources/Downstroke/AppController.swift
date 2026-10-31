@@ -277,7 +277,7 @@ final class AppController: ObservableObject {
         let status = hotkeys.register(hotkey) { [weak self] in self?.hotkeyPressed() }
         switch status {
         case noErr: hotkeyError = nil
-        case OSStatus(eventHotKeyExistsErr): hotkeyError = "\(hotkey.displayString) is already in use by another app."
+        case OSStatus(eventHotKeyExistsErr): hotkeyError = "\(hotkey.displayString) is already in use as a global shortcut."
         default: hotkeyError = "macOS refused \(hotkey.displayString) (error \(status))."
         }
     }

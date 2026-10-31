@@ -80,6 +80,8 @@ final class AppController: ObservableObject {
     @Published private(set) var listening = false
     @Published private(set) var permissionMissing = false
     @Published private(set) var sensorStatus = SensorStatus.off
+    /// What the pipeline uses: the sensor is actually streaming.
+    @Published private(set) var sensorAvailable = false
     @Published private(set) var latencyP50: Double?
     @Published private(set) var latencyP99: Double?
     @Published private(set) var latencyCount = 0
@@ -126,8 +128,9 @@ final class AppController: ObservableObject {
     // Audition latencies never reach LatencyStats: the readout is from real key presses only.
     private var lastAudition = -Double.infinity
     private var auditionedSinceDrain = false
-    private var sensorAvailable = false
     private var sensorStartedAt = 0.0
+    // The bank the pipeline holds, kept when the selected board's bank fails to build.
+    private var pipelineBank: SampleBank?
 
     init(defaults: UserDefaults = .standard, loginItems: any LoginItemService = MainAppLoginItem()) {
         store = SettingsStore(defaults: defaults)
@@ -242,7 +245,13 @@ final class AppController: ObservableObject {
         auditionedSinceDrain = true
     }
 
-    func requestPermission() { KeyTap.requestPermission() }
+    /// Once macOS has listed or denied the app, only System Settings can grant it.
+    func requestPermission() {
+        guard !KeyTap.requestPermission() else { return }
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+            NSWorkspace.shared.open(url)
+        }
+    }
 
     // MARK: Wiring
 
@@ -251,9 +260,7 @@ final class AppController: ObservableObject {
         store.save()
         syncHotkey()
         mixer.setMasterGain(settings.volume)
-        if let bank = bank(for: settings.boardID) {
-            pipeline.update(settings: settings, bank: bank, sensorAvailable: sensorAvailable)
-        }
+        updatePipeline(bank(for: settings.boardID))
         if settings.enabled {
             startEngine()
             startTap()
@@ -380,14 +387,19 @@ final class AppController: ObservableObject {
         }
         if streaming != sensorAvailable {
             sensorAvailable = streaming
-            if let bank = banks[settings.boardID]?.bank {
-                pipeline.update(settings: settings, bank: bank, sensorAvailable: streaming)
-            }
+            updatePipeline()
         }
         if settings.enabled && !tap.isRunning && KeyTap.hasPermission { startTap() }
         if !settings.enabled && engine.isRunning && MonotonicClock.now() >= auditionUntil && mixer.activeVoices == 0 {
             engine.stop()
         }
+    }
+
+    // Falls back to the pipeline's current bank, so settings still land when a bank fails to build.
+    private func updatePipeline(_ bank: SampleBank? = nil) {
+        guard let bank = bank ?? banks[settings.boardID]?.bank ?? pipelineBank else { return }
+        pipelineBank = bank
+        pipeline.update(settings: settings, bank: bank, sensorAvailable: sensorAvailable)
     }
 
     // MARK: Banks
@@ -419,10 +431,10 @@ final class AppController: ObservableObject {
     // Replaced banks are retired, never dropped: voices or queued triggers may still read them.
     private func install(_ bank: SampleBank, rate: Double, generation: Int) {
         guard generation == bankGeneration, banks[bank.boardID]?.rate != rate else { return mixer.retire(bank) }
-        if let old = banks[bank.boardID] { mixer.retire(old.bank) }
+        let old = banks[bank.boardID]?.bank
+        if let old { mixer.retire(old) }
         banks[bank.boardID] = (bank, rate)
-        if bank.boardID == settings.boardID {
-            pipeline.update(settings: settings, bank: bank, sensorAvailable: sensorAvailable)
-        }
+        // The pipeline must never keep pushing for a retired bank.
+        if bank.boardID == settings.boardID || (old != nil && old === pipelineBank) { updatePipeline(bank) }
     }
 }

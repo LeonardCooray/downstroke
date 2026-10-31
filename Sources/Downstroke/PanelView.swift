@@ -180,7 +180,7 @@ private struct PermissionBanner: View {
                     .buttonStyle(.borderedProminent)
                     .focusable(false)
                     .accessibilityIdentifier("allowInputMonitoring")
-                Text("After granting access, quit and reopen Downstroke.")
+                Text("If sounds don't start within a few seconds of allowing it, quit and reopen Downstroke.")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

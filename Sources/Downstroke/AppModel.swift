@@ -39,10 +39,8 @@ struct PanelState: Equatable {
             enabled: s.enabled, permissionMissing: c.permissionMissing, frontmostBundleID: c.frontmostBundleID,
             mutedBundleIDs: s.mutedBundleIDs, micInUse: c.micInUse, muteWhileMicInUse: s.muteWhileMicInUse,
             boardName: boardName, hotkeyUnavailable: c.hotkeyError != nil, appName: Self.appName)
-        switch c.sensorStatus {
-        case .off, .unavailable: fixedStrength = true
-        case .starting, .streaming, .stalled: fixedStrength = !s.hitStrengthEnabled
-        }
+        // Same condition the pipeline uses, so the meter never animates over fixed-strength presses.
+        fixedStrength = !(c.sensorAvailable && s.hitStrengthEnabled)
         footer = Self.footer(p50: c.latencyP50, bluetooth: c.outputIsBluetooth)
     }
 

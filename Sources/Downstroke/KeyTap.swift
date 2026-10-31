@@ -34,7 +34,9 @@ final class KeyTap: @unchecked Sendable {
 
     static var hasPermission: Bool { CGPreflightListenEventAccess() }
 
-    static func requestPermission() { CGRequestListenEventAccess() }
+    /// True if access is already granted.
+    @discardableResult
+    static func requestPermission() -> Bool { CGRequestListenEventAccess() }
 
     var onEvent: (@Sendable (KeyEvent) -> Void)? {
         get { state.withLock { $0.handler } }
@@ -132,7 +134,10 @@ final class KeyTap: @unchecked Sendable {
 
     private func emit(_ event: CGEvent, isRelease: Bool, isModifier: Bool) {
         // CGEvent timestamps are mach-clock nanoseconds; synthetic events may carry 0.
-        let time = event.timestamp == 0 ? MonotonicClock.now() : MonotonicClock.seconds(fromNanoseconds: event.timestamp)
+        let now = MonotonicClock.now()
+        var time = event.timestamp == 0 ? now : MonotonicClock.seconds(fromNanoseconds: event.timestamp)
+        // A unit surprise degrades to callback time instead of losing every hit window.
+        if abs(now - time) > 0.25 { time = now }
         let keyEvent = KeyEvent(time: time, keyCode: Self.keyCode(event), isRelease: isRelease, isModifier: isModifier)
         state.withLock { $0.handler }?(keyEvent)
     }

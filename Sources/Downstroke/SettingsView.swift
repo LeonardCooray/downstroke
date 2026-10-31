@@ -195,23 +195,23 @@ struct SoundSettings: View {
         SettingsPage {
             Section {
                 Toggle(isOn: controller.binding(\.hitStrengthEnabled)) {
-                    Text("Shape sound by hit strength")
-                    Text("The motion sensor tells a light tap from a hard strike.")
+                    Text("Accent hard hits")
+                    Text("Hit a key much harder than usual and it sounds heavier.")
                 }
                 Slider(value: controller.sliderBinding(\.sensitivity), in: 0...1) {
-                    Text("Sensitivity")
+                    Text("Slam threshold")
                 } minimumValueLabel: {
-                    Text("Low")
+                    Text("Hard to trigger")
                 } maximumValueLabel: {
-                    Text("High")
+                    Text("Easy to trigger")
                 }
                 .disabled(!controller.settings.hitStrengthEnabled)
                 if case .unavailable = controller.sensorStatus, controller.settings.hitStrengthEnabled {
-                    Label("Motion sensor unavailable, so every press plays at a fixed strength.", systemImage: "exclamationmark.triangle.fill")
+                    Label("Motion sensor unavailable, so there's no slam accent.", systemImage: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange)
                 }
             } header: {
-                Text("Hit strength")
+                Text("Slam accent")
             }
             Section {
                 Toggle(isOn: controller.binding(\.keyUpSounds)) {
@@ -351,6 +351,7 @@ struct DiagnosticsSettings: View {
                 row("Input Monitoring", s.permission ? "Granted" : "Not granted", health: s.permission ? .good : .bad)
                 row("Key tap", s.tap)
                 row("Motion sensor", s.sensor, health: s.sensorHealth)
+                row("Slams since launch", "\(s.slams)")
             }
             Section("Audio output") {
                 row("Engine", s.engine, health: s.engineHealth)

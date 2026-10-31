@@ -154,6 +154,7 @@ struct DiagnosticsSnapshot: Equatable {
     var p99: Double?
     var count = 0
     var voices = 0
+    var slams = 0
     var problems: [String] = []
 
     static let maxVoices = 48
@@ -177,6 +178,7 @@ struct DiagnosticsSnapshot: Equatable {
             "Input Monitoring: \(permission ? "granted" : "not granted")",
             "Key tap: \(tap)",
             "Motion sensor: \(sensor)",
+            "Slams since launch: \(slams)",
             "Audio engine: \(engine)",
             "Output: \(device)\(bluetooth ? " (Bluetooth)" : "")",
             "Sample rate: \(sampleRateText)",
@@ -233,6 +235,7 @@ final class DiagnosticsModel: ObservableObject {
         s.p99 = c.latencyP99
         s.count = c.latencyCount
         s.voices = c.mixer.activeVoices
+        s.slams = c.pipeline.slamCount
         s.problems = (c.engineError.map { ["Audio engine: \($0)"] } ?? []) + c.packErrors.map { "Sound pack: \($0)" }
         if s != snapshot { snapshot = s }
     }
@@ -258,7 +261,7 @@ final class DiagnosticsModel: ObservableObject {
         let rate = sensorRate()
         switch controller.sensorStatus {
         case .off:
-            return (controller.settings.hitStrengthEnabled ? "Off while Downstroke is off" : "Off: hit strength is off", .idle)
+            return (controller.settings.hitStrengthEnabled ? "Off while Downstroke is off" : "Off: slam accent is off", .idle)
         case .starting: return ("Starting…", .warning)
         case .streaming:
             guard let rate else { return ("Streaming", .good) }

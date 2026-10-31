@@ -13,10 +13,11 @@ private func restoreTerminal() {
     tcsetattr(STDIN_FILENO, TCSANOW, &savedTerminal)
 }
 
-/// `Downstroke --probe`: checks the sensor streams and that hard presses read at least twice as strong as soft ones.
+/// `Downstroke --probe`: checks the sensor streams and that the default slam threshold catches SLAM presses but not SOFT ones.
 enum ProbeMode {
     static let pressesPerSet = 20
-    static let passRatio: Float = 2.0
+    static let minHardSlams = 0.6
+    static let maxSoftSlams = 0.1
 
     static var isRequested: Bool { CommandLine.arguments.contains("--probe") }
 
@@ -96,7 +97,7 @@ enum ProbeMode {
             if !e.isRelease && !e.isModifier { queue.push(Press(time: e.time, lag: MonotonicClock.now() - e.time)) }
         }
         var sets: [[Float]] = []
-        for label in ["SOFT", "HARD"] {
+        for label in ["SOFT", "SLAM"] {
             switch collect(label, queue: queue, ring: ring, showLag: sets.isEmpty) {
             case .peaks(let peaks):
                 sets.append(peaks)
@@ -111,13 +112,15 @@ enum ProbeMode {
         }
         let soft = sets[0], hard = sets[1]
 
-        let softMedian = median(soft)
-        let hardMedian = median(hard)
-        let ratio = hardMedian / softMedian
-        print(String(format: "soft median %.2f mg", softMedian * 1000))
-        print(String(format: "hard median %.2f mg", hardMedian * 1000))
-        print(String(format: "ratio %.2f", ratio))
-        let pass = ratio >= passRatio
+        let mapper = SlamMapper(sensitivity: DownstrokeSettings().sensitivity)
+        func slamShare(_ peaks: [Float]) -> Double {
+            Double(peaks.filter { mapper.velocity(forPeak: $0) > SlamMapper.normalVelocity }.count) / Double(peaks.count)
+        }
+        let softShare = slamShare(soft), hardShare = slamShare(hard)
+        print(String(format: "slam threshold %.2f mg (default)", mapper.threshold * 1000))
+        print(String(format: "soft median %.2f mg, %.0f%% over threshold", median(soft) * 1000, softShare * 100))
+        print(String(format: "slam median %.2f mg, %.0f%% over threshold", median(hard) * 1000, hardShare * 100))
+        let pass = hardShare >= minHardSlams && softShare <= maxSoftSlams
         print(pass ? "PASS" : "FAIL")
         finish(pass ? 0 : 1)
     }

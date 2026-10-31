@@ -75,6 +75,9 @@ final class AppController: ObservableObject {
     @Published private(set) var engineError: String?
     @Published private(set) var settings: DownstrokeSettings
 
+    /// Set by the Settings window owner; `openSettings()` calls it.
+    var onOpenSettings: (() -> Void)?
+
     let queue = TriggerQueue()
     let ring = SampleRing()
     let mixer: VoiceMixer
@@ -147,6 +150,11 @@ final class AppController: ObservableObject {
     func setEnabled(_ on: Bool) { update { $0.enabled = on } }
 
     func setVolume(_ volume: Float) { update { $0.volume = min(max(volume, 0), 1) } }
+
+    /// Live gain while the volume slider drags, without saving; `setVolume` commits.
+    func previewVolume(_ volume: Float) { mixer.setMasterGain(min(max(volume, 0), 1)) }
+
+    func openSettings() { onOpenSettings?() }
 
     func selectBoard(_ id: String) {
         guard boards.contains(where: { $0.id == id }) else { return }

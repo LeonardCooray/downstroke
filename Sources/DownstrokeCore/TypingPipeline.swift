@@ -24,6 +24,8 @@ public final class TypingPipeline: @unchecked Sendable {
     private let state: Mutex<State>
     // Mirrors `!pending.isEmpty`, written under the lock, so idle ticks skip it.
     private let pendingFlag = Atomic<Bool>(false)
+    // Press count in the high 32 bits, velocity bit pattern in the low 32.
+    private let pressStamp = Atomic<UInt64>(0)
 
     public init(queue: TriggerQueue, ring: SampleRing?, random: sending any RandomNumberGenerator = SystemRandomNumberGenerator()) {
         self.queue = queue
@@ -86,6 +88,12 @@ public final class TypingPipeline: @unchecked Sendable {
     /// Velocity of the latest played press, nil before the first.
     public var lastVelocity: Float? { state.withLock { $0.lastVelocity } }
 
+    /// Lock-free count and velocity of played presses, for a live meter; a new count means a new press.
+    public var lastPress: (count: UInt32, velocity: Float) {
+        let stamp = pressStamp.load(ordering: .acquiring)
+        return (UInt32(truncatingIfNeeded: stamp >> 32), Float(bitPattern: UInt32(truncatingIfNeeded: stamp)))
+    }
+
     /// Plays a fixed A-key press, ignoring `enabled` and the mute rules.
     public func audition(boardBank: SampleBank) {
         state.withLock { s in
@@ -133,7 +141,11 @@ public final class TypingPipeline: @unchecked Sendable {
 
     private func emit(_ e: KeyEvent, velocity: Float, _ s: inout State) {
         guard let bank = s.bank else { return }
-        if !e.isRelease { s.lastVelocity = velocity }
+        if !e.isRelease {
+            s.lastVelocity = velocity
+            let count = (pressStamp.load(ordering: .relaxed) >> 32) &+ 1
+            pressStamp.store(count << 32 | UInt64(velocity.bitPattern), ordering: .releasing)
+        }
         for t in s.planner.plan(e, velocity: velocity, bank: bank, settings: s.settings) { _ = queue.push(t) }
     }
 }

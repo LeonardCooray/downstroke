@@ -219,6 +219,16 @@ private struct Rig {
     #expect(rig.pipeline.lastVelocity == 0.5)
 }
 
+@Test func lastPressCountsEveryPlayedPressEvenAtTheSameVelocity() {
+    let rig = Rig(sensorAvailable: false)
+    #expect(rig.pipeline.lastPress.count == 0)
+    rig.pipeline.keyEvent(press(at: 1.0), now: 1.0)
+    rig.pipeline.keyEvent(release(at: 1.05), now: 1.05)
+    rig.pipeline.keyEvent(press(at: 1.1), now: 1.1)
+    #expect(rig.pipeline.lastPress.count == 2)
+    #expect(rig.pipeline.lastPress.velocity == 0.5)
+}
+
 @Test func turningSensingOffFlushesAndClearsPending() {
     let rig = Rig()
     rig.pipeline.keyEvent(press(at: 1.0), now: 1.0)

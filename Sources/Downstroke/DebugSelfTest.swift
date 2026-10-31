@@ -1,7 +1,9 @@
 #if DEBUG
+import AppKit
 import CoreGraphics
 import DownstrokeCore
 import Foundation
+import SwiftUI
 
 // Debug-only checks: `Downstroke --self-test <name>` prints PASS/FAIL lines and exits non-zero on any FAIL.
 @MainActor
@@ -20,6 +22,8 @@ enum DebugSelfTest {
             case "audio": await audio()
             case "audio-reconfigure": await audioReconfigure()
             case "mic": await mic()
+            case "panel": await panel()
+            case "panel-shots": await panelShots()
             default: check(false, "unknown self-test \(args[i + 1])")
             }
             exit(failures == 0 ? 0 : 1)
@@ -112,6 +116,198 @@ enum DebugSelfTest {
         check(SystemAudio.processInputStates?.contains { $0.pid == getpid() && $0.input } == false,
               "our process is not running input")
         check(after == before, "our output engine does not change micInUse")
+    }
+
+    static func panel() async {
+        // Seeded off, so start() loads boards and banks but runs no tap, engine or sensor.
+        guard let defaults = isolatedDefaults() else { return check(false, "isolated defaults suite") }
+        let store = SettingsStore(defaults: defaults)
+        store.settings.enabled = false
+        store.save()
+        let controller = AppController(defaults: defaults)
+        controller.start()
+        let menuBar = MenuBarController(controller: controller)
+        var settingsOpened = 0
+        controller.onOpenSettings = { settingsOpened += 1 }
+        try? await Task.sleep(for: .milliseconds(300))
+
+        let frontBefore = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let t0 = MonotonicClock.now()
+        menuBar.showPanel()
+        let openMs = (MonotonicClock.now() - t0) * 1000
+        check(openMs < 16, String(format: "panel opens in under 16 ms (%.2f ms)", openMs))
+        check(menuBar.panel.isVisible, "panel visible after the status item opens it")
+        check(menuBar.panel.isKeyWindow, "panel is key")
+        check(menuBar.panel.frame.width == PanelContent.width, "panel is \(Int(PanelContent.width)) pt wide (\(menuBar.panel.frame.width))")
+        if let button = menuBar.statusItem.button, let window = button.window, let screen = window.screen {
+            let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
+            let frame = menuBar.panel.frame
+            check(frame.maxY <= anchor.minY && screen.visibleFrame.contains(frame), "panel sits below the status item, on its screen")
+        }
+        try? await Task.sleep(for: .milliseconds(300))
+        let ticks = menuBar.model.meterTicks
+        check(ticks >= 10, "meter display link ticks while open (\(ticks) in ~0.3 s)")
+        let frontAfter = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        check(frontAfter == frontBefore && frontAfter != getpid(), "frontmost app unchanged by the panel (pid \(frontAfter ?? -1))")
+
+        // SwiftUI exposes no identifiers without an accessibility client, so this checks the state the view renders.
+        let state = PanelState(controller)
+        let headings = state.sections.map(\.texture.rawValue)
+        check(headings == Texture.allCases.map(\.rawValue), "texture headings in order: \(headings.joined(separator: ", "))")
+        let rows = state.sections.flatMap(\.rows)
+        check(rows.count == 20, "20 board rows (\(rows.count))")
+        check(state.status == "Off" && state.fixedStrength, "status Off and fixed strength while disabled")
+
+        let target = rows.map(\.id).first { $0 != controller.settings.boardID } ?? ""
+        menuBar.model.select(target)
+        check(controller.settings.boardID == target, "selecting the \(target) row sets settings.boardID (now \(controller.settings.boardID))")
+        check(SettingsStore(defaults: defaults).settings.boardID == target, "selection saved to the isolated suite")
+
+        // Escape and Cmd-comma through the app's own event queue, as the panel receives them.
+        postKey(53, characters: "\u{1b}", window: menuBar.panel)
+        try? await Task.sleep(for: .milliseconds(150))
+        check(!menuBar.panel.isVisible, "Escape closes the panel")
+        let closedTicks = menuBar.model.meterTicks
+        try? await Task.sleep(for: .milliseconds(100))
+        check(menuBar.model.meterTicks == closedTicks, "meter stops ticking once closed")
+        menuBar.showPanel()
+        try? await Task.sleep(for: .milliseconds(100))
+        postKey(43, characters: ",", flags: .command, window: menuBar.panel)
+        try? await Task.sleep(for: .milliseconds(150))
+        check(settingsOpened == 1, "Cmd-comma opens Settings (\(settingsOpened) calls)")
+        check(!menuBar.panel.isVisible, "opening Settings closes the panel")
+
+        var times: [Double] = []
+        for _ in 0..<5 {
+            let t = MonotonicClock.now()
+            menuBar.showPanel()
+            times.append((MonotonicClock.now() - t) * 1000)
+            try? await Task.sleep(for: .milliseconds(50))
+            menuBar.hidePanel()
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        times.sort()
+        check(times[2] < 16, String(format: "reopen median under 16 ms (%.2f ms, max %.2f)", times[2], times[4]))
+
+        controller.setEnabled(false)
+        check(menuBar.statusItem.button?.appearsDisabled == true, "menu bar glyph dimmed while off")
+
+        let meter = MeterModel()
+        meter.reset(count: 0)
+        meter.step(press: (1, 1.0), now: 10)
+        check(meter.lit == 16, "full hit lights 16 segments (\(meter.lit))")
+        meter.step(press: (1, 1.0), now: 10.15)
+        check(meter.lit == 8, "half decayed after 150 ms (\(meter.lit))")
+        meter.step(press: (1, 1.0), now: 10.3)
+        check(meter.lit == 0, "dark after 300 ms (\(meter.lit))")
+        meter.step(press: (2, 0.5), now: 11)
+        check(meter.lit == 8, "a new press re-arms the meter (\(meter.lit))")
+
+        let name = { (id: String) in id == "us.zoom.xos" ? "zoom.us" : id }
+        func status(enabled: Bool = true, permission: Bool = false, front: String? = nil, mic: Bool = false) -> String {
+            PanelState.status(
+                enabled: enabled, permissionMissing: permission, frontmostBundleID: front, mutedBundleIDs: ["us.zoom.xos"],
+                micInUse: mic, muteWhileMicInUse: true, boardName: "Holy Panda", appName: name)
+        }
+        check(status() == "Listening · Holy Panda", "status: listening")
+        check(status(enabled: false, permission: true) == "Off", "status: off")
+        check(status(permission: true) == "Needs Input Monitoring", "status: needs Input Monitoring")
+        check(status(front: "us.zoom.xos", mic: true) == "Muted in zoom.us", "status: muted app")
+        check(status(front: "com.apple.Notes", mic: true) == "Muted: mic in use", "status: mic in use")
+        check(PanelState.footer(p50: 0.0094, bluetooth: false) == "Key → sound 9 ms", "footer: p50 rounded")
+        check(PanelState.footer(p50: nil, bluetooth: false) == "Key → sound — ms", "footer: no data")
+        check(PanelState.footer(p50: 0.02, bluetooth: true) == "Bluetooth adds delay", "footer: Bluetooth")
+        menuBar.hidePanel()
+        defaults.removePersistentDomain(forName: AudioRig.isolatedSuite)
+    }
+
+    /// Renders the panel in fixed states to build/panel-*.png, plus window captures if screencapture is allowed.
+    static func panelShots() async {
+        guard let defaults = isolatedDefaults() else { return check(false, "isolated defaults suite") }
+        let boards = BundledPacks.load().0
+        let model = PanelModel(controller: AppController(defaults: defaults))
+        model.meter.show(11)
+        let listening = PanelState(
+            enabled: true, status: "Listening · Holy Panda", permissionMissing: false, volume: 0.68, fixedStrength: false,
+            sections: PanelState.sections(boards), currentBoardID: "holy-panda", footer: "Key → sound 9 ms")
+        var permission = listening
+        permission.status = "Needs Input Monitoring"
+        permission.permissionMissing = true
+        permission.footer = "Key → sound — ms"
+        var scrolled = listening
+        scrolled.currentBoardID = "cherry-mx-clear"
+        let out = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("build")
+        let shots: [(String, PanelState, NSAppearance.Name)] = [
+            ("light", listening, .aqua), ("dark", listening, .darkAqua),
+            ("permission-dark", permission, .darkAqua), ("scrolled-dark", scrolled, .darkAqua),
+        ]
+        for (name, state, appearance) in shots {
+            model.hover("topre", inside: name == "light")
+            let panel = PopoverPanel(content: PanelContent(state: state, model: model))
+            panel.appearance = NSAppearance(named: appearance)
+            let screen = NSScreen.main!.visibleFrame
+            panel.show(below: NSRect(x: screen.minX + 40, y: screen.maxY, width: 24, height: 0), on: NSScreen.main)
+            try? await Task.sleep(for: .milliseconds(400))
+            let file = out.appendingPathComponent("panel-\(name).png")
+            check(renderOffscreen(panel, dark: appearance == .darkAqua, to: file), "rendered \(file.path)")
+            let window = out.appendingPathComponent("panel-window-\(name).png")
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            p.arguments = ["-x", "-o", "-l", "\(panel.windowNumber)", window.path]
+            try? p.run()
+            p.waitUntilExit()
+            let size = (try? FileManager.default.attributesOfItem(atPath: window.path)[.size] as? Int) ?? 0
+            print(p.terminationStatus == 0 && size > 0 ? "  captured \(window.path)" : "  screencapture failed (status \(p.terminationStatus)); Screen Recording likely not granted")
+            panel.orderOut(nil)
+        }
+    }
+
+    private static func isolatedDefaults() -> UserDefaults? {
+        guard let defaults = UserDefaults(suiteName: AudioRig.isolatedSuite) else { return nil }
+        defaults.removePersistentDomain(forName: AudioRig.isolatedSuite)
+        return defaults
+    }
+
+    private static func postKey(_ code: UInt16, characters: String, flags: NSEvent.ModifierFlags = [], window: NSWindow) {
+        guard let event = NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: flags, timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber, context: nil, characters: characters,
+            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code)
+        else { return }
+        NSApp.postEvent(event, atStart: false)
+    }
+
+    // The behind-window material can't be cached, so it is approximated over a backdrop.
+    private static func renderOffscreen(_ panel: NSPanel, dark: Bool, to url: URL) -> Bool {
+        guard let view = panel.contentView?.subviews.first, let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return false }
+        view.cacheDisplay(in: view.bounds, to: rep)
+        let pad: CGFloat = 36
+        let size = NSSize(width: view.bounds.width + pad * 2, height: view.bounds.height + pad * 2)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        let backdrop = dark
+            ? NSGradient(starting: NSColor(srgbRed: 0.16, green: 0.18, blue: 0.27, alpha: 1), ending: NSColor(srgbRed: 0.30, green: 0.22, blue: 0.33, alpha: 1))
+            : NSGradient(starting: NSColor(srgbRed: 0.62, green: 0.72, blue: 0.86, alpha: 1), ending: NSColor(srgbRed: 0.86, green: 0.78, blue: 0.84, alpha: 1))
+        backdrop?.draw(in: NSRect(origin: .zero, size: size), angle: -60)
+        let rect = NSRect(x: pad, y: pad, width: view.bounds.width, height: view.bounds.height)
+        let shape = NSBezierPath(roundedRect: rect, xRadius: PopoverPanel.cornerRadius, yRadius: PopoverPanel.cornerRadius)
+        NSGraphicsContext.saveGraphicsState()
+        let shadow = NSShadow()
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.35)
+        shadow.shadowBlurRadius = 24
+        shadow.shadowOffset = NSSize(width: 0, height: -10)
+        shadow.set()
+        (dark ? NSColor(srgbRed: 0.16, green: 0.16, blue: 0.18, alpha: 0.94) : NSColor(srgbRed: 0.96, green: 0.96, blue: 0.97, alpha: 0.94)).setFill()
+        shape.fill()
+        NSGraphicsContext.restoreGraphicsState()
+        NSGraphicsContext.saveGraphicsState()
+        shape.addClip()
+        rep.draw(in: rect)
+        NSGraphicsContext.restoreGraphicsState()
+        image.unlockFocus()
+        guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
+              let png = bitmap.representation(using: .png, properties: [:]) else { return false }
+        return (try? png.write(to: url)) != nil
     }
 
     private static func startAudioRig() -> (AudioRig, SampleBank)? {

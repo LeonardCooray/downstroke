@@ -19,12 +19,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in exit(await BenchMode.run()) }
             return
         }
-        menuBar = MenuBarController()
         #if DEBUG
         if DebugSelfTest.isRequested { return DebugSelfTest.runIfRequested() }
         #endif
         let controller = AppController()
         controller.start()
         self.controller = controller
+        menuBar = MenuBarController(controller: controller)
     }
 }

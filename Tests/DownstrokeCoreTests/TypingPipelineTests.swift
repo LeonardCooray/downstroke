@@ -237,3 +237,11 @@ private struct Rig {
     #expect(!rig.pipeline.hasPending)
     #expect(rig.slots() == [.press(.medium), .press(.hard)])
 }
+
+@Test func exposesLatestSettings() {
+    var settings = DownstrokeSettings()
+    settings.sensitivity = 0.8
+    settings.mutedBundleIDs = ["com.example.app"]
+    let rig = Rig(settings: settings)
+    #expect(rig.pipeline.settings == settings)
+}

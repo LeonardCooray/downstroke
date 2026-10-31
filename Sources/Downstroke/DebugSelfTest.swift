@@ -2,10 +2,33 @@
 import AppKit
 import CoreGraphics
 import DownstrokeCore
+import Carbon.HIToolbox
 import Foundation
+import ServiceManagement
 import SwiftUI
 
 // Debug-only checks: `Downstroke --self-test <name>` prints PASS/FAIL lines and exits non-zero on any FAIL.
+/// Stands in for SMAppService.mainApp so self-tests never touch the real login item.
+@MainActor
+final class FakeLoginItem: LoginItemService {
+    var status = SMAppService.Status.notRegistered
+    var failure: (any Error)?
+    private(set) var registerCalls = 0
+    private(set) var unregisterCalls = 0
+
+    func register() throws {
+        registerCalls += 1
+        if let failure { throw failure }
+        status = .enabled
+    }
+
+    func unregister() throws {
+        unregisterCalls += 1
+        if let failure { throw failure }
+        status = .notRegistered
+    }
+}
+
 @MainActor
 enum DebugSelfTest {
     private static var failures = 0
@@ -24,6 +47,8 @@ enum DebugSelfTest {
             case "mic": await mic()
             case "panel": await panel()
             case "panel-shots": await panelShots()
+            case "settings": await settings()
+            case "settings-shots": await settingsShots()
             default: check(false, "unknown self-test \(args[i + 1])")
             }
             exit(failures == 0 ? 0 : 1)
@@ -227,6 +252,225 @@ enum DebugSelfTest {
         check(PanelState.footer(p50: nil, bluetooth: false) == "Key → sound — ms", "footer: no data")
         check(PanelState.footer(p50: 0.02, bluetooth: true) == "Bluetooth adds delay", "footer: Bluetooth")
         menuBar.hidePanel()
+        defaults.removePersistentDomain(forName: AudioRig.isolatedSuite)
+    }
+
+    static func settings() async {
+        // Volume 0 and fixed strength: synthetic presses emit at once and stay silent.
+        guard let defaults = isolatedDefaults() else { return check(false, "isolated defaults suite") }
+        let seed = SettingsStore(defaults: defaults)
+        seed.settings.volume = 0
+        seed.settings.hitStrengthEnabled = false
+        seed.save()
+        let login = FakeLoginItem()
+        let controller = AppController(defaults: defaults, loginItems: login)
+        controller.start()
+        let settingsWindow = SettingsWindowController(controller: controller)
+        let model = settingsWindow.model
+        try? await Task.sleep(for: .milliseconds(300))
+        func saved() -> DownstrokeSettings { SettingsStore(defaults: defaults).settings }
+        func everywhere<T: Equatable>(_ key: KeyPath<DownstrokeSettings, T>, _ value: T) -> Bool {
+            controller.settings[keyPath: key] == value && saved()[keyPath: key] == value && controller.pipeline.settings[keyPath: key] == value
+        }
+
+        controller.binding(\.hitStrengthEnabled).wrappedValue = true
+        check(everywhere(\.hitStrengthEnabled, true), "hit strength on: saved and in the pipeline")
+        controller.binding(\.hitStrengthEnabled).wrappedValue = false
+        check(everywhere(\.hitStrengthEnabled, false), "hit strength off: saved and in the pipeline")
+        controller.sliderBinding(\.sensitivity).wrappedValue = 0.8
+        check(everywhere(\.sensitivity, 0.8), "sensitivity 0.8: saved and in the pipeline")
+        controller.binding(\.keyUpSounds).wrappedValue = false
+        check(everywhere(\.keyUpSounds, false), "key-up sounds off: saved and in the pipeline")
+        controller.sliderBinding(\.stereoWidth).wrappedValue = 0.2
+        check(everywhere(\.stereoWidth, 0.2), "stereo width 0.2: saved and in the pipeline")
+        controller.binding(\.muteWhileMicInUse).wrappedValue = false
+        check(everywhere(\.muteWhileMicInUse, false), "mute while mic in use off: saved and in the pipeline")
+        model.mute("com.example.selftest")
+        check(everywhere(\.mutedBundleIDs, ["com.example.selftest"]), "muting an app: saved and in the pipeline")
+        model.unmuteSelected()
+        check(everywhere(\.mutedBundleIDs, []), "unmuting the selected app: saved and in the pipeline")
+        let f12 = Hotkey(keyCode: 111, modifiers: Hotkey.control | Hotkey.option | Hotkey.command)
+        controller.binding(\.hotkey).wrappedValue = f12
+        check(everywhere(\.hotkey, f12) && controller.hotkeys.isRegistered && controller.hotkeyError == nil,
+              "hotkey ⌃⌥⌘F12: saved, in the pipeline and registered")
+        controller.binding(\.hotkey).wrappedValue = .defaultToggle
+        check(everywhere(\.hotkey, .defaultToggle) && controller.hotkeys.isRegistered && controller.hotkeyError == nil,
+              "hotkey back to ⌃⌥⌘K: registered (\(controller.hotkeyError ?? "no error"))")
+
+        // Synthetic presses against the frontmost app, before the window activates Downstroke.
+        let front = controller.frontmostBundleID ?? "com.example.front"
+        if controller.frontmostBundleID == nil { controller.pipeline.setContext(frontmostBundleID: front, micInUse: false) }
+        func pressPlays() -> Bool {
+            let before = controller.pipeline.lastPress.count
+            let now = MonotonicClock.now()
+            controller.pipeline.keyEvent(KeyEvent(time: now, keyCode: 0, isRelease: false, isModifier: false), now: now)
+            return controller.pipeline.lastPress.count != before
+        }
+        check(pressPlays(), "synthetic key triggers while \(front) is unmuted")
+        model.mute(front)
+        check(!pressPlays(), "muting the frontmost app (\(front)) stops the synthetic key's trigger")
+        model.unmuteSelected()
+        check(pressPlays(), "unmuting \(front) brings the trigger back")
+        controller.binding(\.muteWhileMicInUse).wrappedValue = true
+        controller.pipeline.setContext(frontmostBundleID: front, micInUse: true)
+        check(!pressPlays(), "mic in use with mute-while-mic on: no trigger")
+        controller.binding(\.muteWhileMicInUse).wrappedValue = false
+        check(pressPlays(), "mic in use with mute-while-mic off: trigger")
+        controller.pipeline.setContext(frontmostBundleID: front, micInUse: SystemAudio.micInUse)
+
+        check(controller.settings.enabled && controller.hotkeys.isRegistered, "⌃⌥⌘K registered while on")
+        controller.hotkeys.simulatePress()
+        check(everywhere(\.enabled, false) && PanelState(controller).status == "Off", "hotkey turns Downstroke off, saved, panel says Off")
+        controller.hotkeys.simulatePress()
+        check(everywhere(\.enabled, true), "hotkey turns Downstroke back on, saved")
+
+        controller.setHotkeySuspended(true)
+        check(!controller.hotkeys.isRegistered, "recording releases the hotkey")
+        controller.setHotkeySuspended(false)
+        check(controller.hotkeys.isRegistered, "ending recording registers it again")
+
+        controller.binding(\.hotkey).wrappedValue = Hotkey(keyCode: KeyCode.k, modifiers: 0)
+        check(!controller.hotkeys.isRegistered && controller.hotkeyError != nil,
+              "unusable hotkey shows an error (\(controller.hotkeyError ?? "none"))")
+        let status = PanelState.status(
+            enabled: true, permissionMissing: false, frontmostBundleID: nil, mutedBundleIDs: [], micInUse: false,
+            muteWhileMicInUse: true, boardName: "Holy Panda", hotkeyUnavailable: true, appName: { $0 })
+        check(status == "Hotkey unavailable", "panel status: Hotkey unavailable")
+        if !controller.permissionMissing && !controller.micInUse {
+            check(PanelState(controller).status == "Hotkey unavailable", "live panel status shows the failed hotkey")
+        }
+        let taken = Hotkey(keyCode: 109, modifiers: Hotkey.control | Hotkey.option | Hotkey.command)
+        let squatter = HotkeyCenter()
+        let squatStatus = squatter.register(taken) {}
+        controller.binding(\.hotkey).wrappedValue = taken
+        if squatStatus == noErr && controller.hotkeyError != nil {
+            check(controller.hotkeyError?.contains("already in use") == true, "a combo already registered shows in use (\(controller.hotkeyError ?? ""))")
+        } else {
+            print("  note: Carbon accepted a duplicate registration of ⌃⌥⌘F10 (status \(squatStatus)); in-use path not exercised")
+        }
+        squatter.unregister()
+        controller.binding(\.hotkey).wrappedValue = .defaultToggle
+        check(controller.hotkeys.isRegistered && controller.hotkeyError == nil, "default hotkey restored and registered")
+
+        check(!controller.launchesAtLogin && login.registerCalls == 0, "launch at login off by default, nothing registered at start")
+        controller.setLaunchAtLogin(true)
+        check(login.registerCalls == 1 && controller.loginStatus == .enabled && controller.loginError == nil && everywhere(\.launchAtLogin, true),
+              "launch at login on: registered, saved and in the pipeline")
+        controller.setLaunchAtLogin(false)
+        check(login.unregisterCalls == 1 && !controller.launchesAtLogin && everywhere(\.launchAtLogin, false), "launch at login off: unregistered")
+        login.failure = NSError(domain: "SMAppServiceErrorDomain", code: 1, userInfo: [NSLocalizedDescriptionKey: "Operation not permitted"])
+        controller.setLaunchAtLogin(true)
+        check(controller.loginError?.contains("Operation not permitted") == true && !controller.launchesAtLogin && everywhere(\.launchAtLogin, false),
+              "failed registration shows its error (\(controller.loginError ?? "none")) and stays off")
+        login.failure = nil
+        login.status = .requiresApproval
+        controller.refreshLoginStatus()
+        check(controller.launchesAtLogin, "requires-approval reads as on, with the approval hint")
+        login.status = .notRegistered
+        controller.refreshLoginStatus()
+
+        controller.openSettings()
+        try? await Task.sleep(for: .milliseconds(400))
+        guard let window = settingsWindow.window else { return check(false, "Settings window built") }
+        check(window.isVisible, "openSettings shows the Settings window")
+        check(window.isKeyWindow && NSApp.isActive, "Settings is key and Downstroke active (key \(window.isKeyWindow), active \(NSApp.isActive))")
+        check(window.title == "General", "window titled after the selected tab (\(window.title))")
+        let labels = window.toolbar?.items.map(\.label).filter { !$0.isEmpty } ?? []
+        check(labels == SettingsTab.allCases.map(\.title), "toolbar tabs: \(labels.joined(separator: ", "))")
+        if let screen = window.screen {
+            check(screen.visibleFrame.contains(window.frame), "window fits on screen (\(Int(window.frame.width))×\(Int(window.frame.height)))")
+        }
+        check(!settingsWindow.diagnostics.isActive, "diagnostics idle on the General tab")
+        let generalHeight = window.frame.height
+        settingsWindow.show(.about)
+        try? await Task.sleep(for: .milliseconds(500))
+        let aboutHeight = window.frame.height
+        settingsWindow.show(.general)
+        try? await Task.sleep(for: .milliseconds(500))
+        check(aboutHeight != generalHeight && window.frame.height == generalHeight,
+              "window resizes per tab and back (General \(Int(generalHeight)), About \(Int(aboutHeight)), General \(Int(window.frame.height)))")
+        settingsWindow.show(.diagnostics)
+        try? await Task.sleep(for: .milliseconds(1100))
+        let ticks = settingsWindow.diagnostics.ticks
+        let snap = settingsWindow.diagnostics.snapshot
+        check(settingsWindow.diagnostics.isActive && ticks >= 3, "diagnostics refresh while visible (\(ticks) ticks)")
+        check(snap.sampleRate > 0 && snap.ioFrames > 0 && snap.device != "None",
+              "diagnostics: \(snap.device), \(snap.sampleRateText), \(snap.ioText), sensor \(snap.sensor)")
+        settingsWindow.show(.sound)
+        try? await Task.sleep(for: .milliseconds(300))
+        let soundTicks = settingsWindow.diagnostics.ticks
+        try? await Task.sleep(for: .milliseconds(500))
+        check(!settingsWindow.diagnostics.isActive && settingsWindow.diagnostics.ticks == soundTicks, "diagnostics stop on another tab")
+        settingsWindow.show(.diagnostics)
+        try? await Task.sleep(for: .milliseconds(300))
+        postKey(13, characters: "w", flags: .command, window: window)
+        try? await Task.sleep(for: .milliseconds(300))
+        check(!window.isVisible, "Cmd-W closes Settings")
+        let closedTicks = settingsWindow.diagnostics.ticks
+        try? await Task.sleep(for: .milliseconds(500))
+        check(!settingsWindow.diagnostics.isActive && settingsWindow.diagnostics.ticks == closedTicks, "diagnostics stop once closed")
+        controller.openSettings()
+        try? await Task.sleep(for: .milliseconds(300))
+        check(settingsWindow.window === window && window.isVisible, "reopening reuses the same window")
+        settingsWindow.close()
+        try? await Task.sleep(for: .milliseconds(200))
+        controller.setEnabled(false)
+        defaults.removePersistentDomain(forName: AudioRig.isolatedSuite)
+    }
+
+    /// Captures each Settings tab in light and dark to build/settings-<tab>-<appearance>.png.
+    static func settingsShots() async {
+        guard let defaults = isolatedDefaults() else { return check(false, "isolated defaults suite") }
+        let seed = SettingsStore(defaults: defaults)
+        seed.settings.volume = 0
+        seed.settings.mutedBundleIDs = ["com.apple.Safari", "com.apple.Notes", "us.zoom.xos"]
+        seed.save()
+        let controller = AppController(defaults: defaults, loginItems: FakeLoginItem())
+        controller.start()
+        let settingsWindow = SettingsWindowController(controller: controller)
+        settingsWindow.model.selectedMuted = "com.apple.Notes"
+        try? await Task.sleep(for: .milliseconds(500))
+        let out = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent("build")
+        for (appearance, name) in [(NSAppearance.Name.aqua, "light"), (.darkAqua, "dark")] {
+            for tab in SettingsTab.allCases {
+                settingsWindow.show(tab)
+                settingsWindow.window?.appearance = NSAppearance(named: appearance)
+                try? await Task.sleep(for: .milliseconds(tab == .diagnostics ? 1500 : 500))
+                guard let window = settingsWindow.window else { return check(false, "Settings window built") }
+                let file = out.appendingPathComponent("settings-\(tab.rawValue)-\(name).png")
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+                p.arguments = ["-x", "-o", "-l", "\(window.windowNumber)", file.path]
+                try? p.run()
+                p.waitUntilExit()
+                let size = (try? FileManager.default.attributesOfItem(atPath: file.path)[.size] as? Int) ?? 0
+                check(p.terminationStatus == 0 && size > 0, "captured \(file.path) (\(Int(window.frame.width))×\(Int(window.frame.height)))")
+            }
+        }
+        // Failure states: an unusable hotkey and a refused login item.
+        let login = FakeLoginItem()
+        login.failure = NSError(domain: "SMAppServiceErrorDomain", code: 1, userInfo: [NSLocalizedDescriptionKey: "Operation not permitted"])
+        let failing = AppController(defaults: defaults, loginItems: login)
+        failing.start()
+        let failingWindow = SettingsWindowController(controller: failing)
+        failing.update { $0.hotkey = Hotkey(keyCode: KeyCode.c, modifiers: Hotkey.command) }
+        failing.setLaunchAtLogin(true)
+        failingWindow.show(.general)
+        failingWindow.window?.appearance = NSAppearance(named: .darkAqua)
+        try? await Task.sleep(for: .milliseconds(500))
+        if let window = failingWindow.window {
+            let file = out.appendingPathComponent("settings-general-errors-dark.png")
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
+            p.arguments = ["-x", "-o", "-l", "\(window.windowNumber)", file.path]
+            try? p.run()
+            p.waitUntilExit()
+            check(p.terminationStatus == 0, "captured \(file.path)")
+        }
+        failingWindow.close()
+        failing.setEnabled(false)
+        settingsWindow.close()
+        controller.setEnabled(false)
         defaults.removePersistentDomain(forName: AudioRig.isolatedSuite)
     }
 

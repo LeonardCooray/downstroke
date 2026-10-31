@@ -18,6 +18,15 @@ enum SystemAudio {
         return transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
     }
 
+    static var outputDeviceName: String? {
+        guard let device = defaultDevice(kAudioHardwarePropertyDefaultOutputDevice) else { return nil }
+        var address = address(kAudioObjectPropertyName)
+        var name: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(device, &address, 0, nil, &size, &name) == noErr, let name else { return nil }
+        return name.takeRetainedValue() as String
+    }
+
     /// Another process is running audio input on any device.
     static var micInUse: Bool {
         if let processes = processObjects() {

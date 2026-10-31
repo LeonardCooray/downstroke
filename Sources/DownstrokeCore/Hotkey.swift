@@ -48,4 +48,12 @@ public struct Hotkey: Codable, Equatable, Hashable, Sendable {
         modifiers == Self.shift | Self.command
             && [KeyCode.three, KeyCode.four, KeyCode.five, KeyCode.six].contains(keyCode)
     }
+
+    /// Why this combo can't be the global shortcut, or nil if it can.
+    public var problem: String? {
+        if isReservedBySystem { return "\(displayString) is reserved by macOS" }
+        if !isUsableGlobally { return "Add ⌃, ⌥ or ⌘" }
+        if modifiers & (Self.control | Self.option) == 0 { return "Add ⌃ or ⌥ so apps keep their ⌘ shortcuts" }
+        return nil
+    }
 }

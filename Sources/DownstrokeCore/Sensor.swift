@@ -107,6 +107,9 @@ public final class SampleRing: @unchecked Sendable {
         written.store(n + 1, ordering: .releasing)
     }
 
+    /// Samples appended so far.
+    public var count: Int { written.load(ordering: .relaxed) }
+
     public var latestTime: Double? {
         let n = written.load(ordering: .acquiring)
         guard n > 0 else { return nil }

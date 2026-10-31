@@ -12,6 +12,7 @@ app.run()
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var menuBar: MenuBarController?
     private var controller: AppController?
+    private var settingsWindow: SettingsWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Bench and self-tests build their own rigs: no tap, no real preferences domain.
@@ -25,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let controller = AppController()
         controller.start()
         self.controller = controller
+        settingsWindow = SettingsWindowController(controller: controller)
         menuBar = MenuBarController(controller: controller)
     }
 }

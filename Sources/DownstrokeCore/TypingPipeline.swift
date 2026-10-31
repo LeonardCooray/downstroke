@@ -82,6 +82,9 @@ public final class TypingPipeline: @unchecked Sendable {
         }
     }
 
+    /// The settings from the latest `update`.
+    public var settings: DownstrokeSettings { state.withLock { $0.settings } }
+
     /// True while a press waits for its hit window; drives the fallback tick timer.
     public var hasPending: Bool { pendingFlag.load(ordering: .acquiring) }
 

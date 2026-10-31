@@ -38,7 +38,7 @@ struct PanelState: Equatable {
         status = Self.status(
             enabled: s.enabled, permissionMissing: c.permissionMissing, frontmostBundleID: c.frontmostBundleID,
             mutedBundleIDs: s.mutedBundleIDs, micInUse: c.micInUse, muteWhileMicInUse: s.muteWhileMicInUse,
-            boardName: boardName, appName: Self.appName)
+            boardName: boardName, hotkeyUnavailable: c.hotkeyError != nil, appName: Self.appName)
         switch c.sensorStatus {
         case .off, .unavailable: fixedStrength = true
         case .starting, .streaming, .stalled: fixedStrength = !s.hitStrengthEnabled
@@ -69,12 +69,14 @@ struct PanelState: Equatable {
 
     static func status(
         enabled: Bool, permissionMissing: Bool, frontmostBundleID: String?, mutedBundleIDs: [String],
-        micInUse: Bool, muteWhileMicInUse: Bool, boardName: String, appName: (String) -> String
+        micInUse: Bool, muteWhileMicInUse: Bool, boardName: String, hotkeyUnavailable: Bool = false,
+        appName: (String) -> String
     ) -> String {
         if !enabled { return "Off" }
         if permissionMissing { return "Needs Input Monitoring" }
         if let app = frontmostBundleID, mutedBundleIDs.contains(app) { return "Muted in \(appName(app))" }
         if micInUse && muteWhileMicInUse { return "Muted: mic in use" }
+        if hotkeyUnavailable { return "Hotkey unavailable" }
         return "Listening · \(boardName)"
     }
 

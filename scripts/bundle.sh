@@ -18,6 +18,7 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Downstroke"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp -R Resources/SoundPacks "$APP/Contents/Resources/SoundPacks"
+cp -R LICENSES "$APP/Contents/Resources/LICENSES"
 
 # Not -v: a self-signed identity is "not trusted" yet still signs fine.
 if security find-identity -p codesigning | grep -q "\"$IDENTITY\""; then

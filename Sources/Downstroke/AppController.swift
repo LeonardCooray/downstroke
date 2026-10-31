@@ -1,7 +1,9 @@
 import AppKit
+import Carbon.HIToolbox
 import Combine
 import DownstrokeCore
 import Foundation
+import ServiceManagement
 
 enum SensorStatus: Equatable {
     case off
@@ -17,6 +19,21 @@ enum BundledPacks {
         guard let url = Bundle.main.resourceURL?.appendingPathComponent("SoundPacks") else { return ([], ["no resource folder"]) }
         do { return try PackLibrary.loadReporting(from: url) } catch { return ([], ["\(url.path): \(error.localizedDescription)"]) }
     }
+}
+
+/// Launch-at-login registration; the real app uses `SMAppService.mainApp`, self-tests a fake.
+@MainActor
+protocol LoginItemService: AnyObject {
+    var status: SMAppService.Status { get }
+    func register() throws
+    func unregister() throws
+}
+
+@MainActor
+final class MainAppLoginItem: LoginItemService {
+    var status: SMAppService.Status { SMAppService.mainApp.status }
+    func register() throws { try SMAppService.mainApp.register() }
+    func unregister() throws { try SMAppService.mainApp.unregister() }
 }
 
 /// 1 ms pipeline tick that runs only while a press waits for its hit window.
@@ -74,6 +91,9 @@ final class AppController: ObservableObject {
     @Published private(set) var packErrors: [String] = []
     @Published private(set) var engineError: String?
     @Published private(set) var settings: DownstrokeSettings
+    @Published private(set) var hotkeyError: String?
+    @Published private(set) var loginStatus: SMAppService.Status
+    @Published private(set) var loginError: String?
 
     /// Set by the Settings window owner; `openSettings()` calls it.
     var onOpenSettings: (() -> Void)?
@@ -88,6 +108,11 @@ final class AppController: ObservableObject {
     private let sensor: MotionSensor
     private let ticker: PendingTicker
     private let frontmost = FrontmostApp()
+    private let loginItems: any LoginItemService
+    let hotkeys = HotkeyCenter()
+    private var hotkeyAttempted: Hotkey?
+    private var hotkeySuspended = false
+    private var started = false
 
     // Every board's bank and the rate it was built at, so switching and auditioning never wait.
     private var banks: [String: (bank: SampleBank, rate: Double)] = [:]
@@ -104,9 +129,11 @@ final class AppController: ObservableObject {
     private var sensorAvailable = false
     private var sensorStartedAt = 0.0
 
-    init(defaults: UserDefaults = .standard) {
+    init(defaults: UserDefaults = .standard, loginItems: any LoginItemService = MainAppLoginItem()) {
         store = SettingsStore(defaults: defaults)
         settings = store.settings
+        self.loginItems = loginItems
+        loginStatus = loginItems.status
         mixer = VoiceMixer(queue: queue)
         engine = AudioEngine(mixer: mixer)
         pipeline = TypingPipeline(queue: queue, ring: ring)
@@ -139,6 +166,7 @@ final class AppController: ObservableObject {
             MainActor.assumeIsolated { self?.didWake() }
         }
         contextChanged()
+        started = true
         apply()
         statusTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.refresh() }
@@ -155,6 +183,39 @@ final class AppController: ObservableObject {
     func previewVolume(_ volume: Float) { mixer.setMasterGain(min(max(volume, 0), 1)) }
 
     func openSettings() { onOpenSettings?() }
+
+    func hotkeyPressed() { setEnabled(!settings.enabled) }
+
+    /// Releases the global hotkey while the recorder listens, so pressing the current combo records it.
+    func setHotkeySuspended(_ suspended: Bool) {
+        guard suspended != hotkeySuspended else { return }
+        hotkeySuspended = suspended
+        if suspended {
+            hotkeys.unregister()
+            hotkeyAttempted = nil
+        } else {
+            syncHotkey()
+        }
+    }
+
+    func setLaunchAtLogin(_ on: Bool) {
+        do {
+            if on { try loginItems.register() } else { try loginItems.unregister() }
+            loginError = nil
+        } catch {
+            loginError = "Couldn't turn launch at login \(on ? "on" : "off"): \(error.localizedDescription)"
+        }
+        refreshLoginStatus()
+        update { $0.launchAtLogin = launchesAtLogin }
+    }
+
+    /// The user can change it in System Settings at any time.
+    func refreshLoginStatus() {
+        let status = loginItems.status
+        if status != loginStatus { loginStatus = status }
+    }
+
+    var launchesAtLogin: Bool { loginStatus == .enabled || loginStatus == .requiresApproval }
 
     func selectBoard(_ id: String) {
         guard boards.contains(where: { $0.id == id }) else { return }
@@ -188,6 +249,7 @@ final class AppController: ObservableObject {
     private func apply() {
         store.settings = settings
         store.save()
+        syncHotkey()
         mixer.setMasterGain(settings.volume)
         if let bank = bank(for: settings.boardID) {
             pipeline.update(settings: settings, bank: bank, sensorAvailable: sensorAvailable)
@@ -201,6 +263,23 @@ final class AppController: ObservableObject {
             listening = false
         }
         if settings.enabled && settings.hitStrengthEnabled { startSensor() } else { stopSensor() }
+    }
+
+    private func syncHotkey() {
+        guard started, !hotkeySuspended, hotkeyAttempted != settings.hotkey else { return }
+        let hotkey = settings.hotkey
+        hotkeyAttempted = hotkey
+        if let problem = hotkey.problem {
+            hotkeys.unregister()
+            hotkeyError = "\(hotkey.displayString) can't be used. \(problem)."
+            return
+        }
+        let status = hotkeys.register(hotkey) { [weak self] in self?.hotkeyPressed() }
+        switch status {
+        case noErr: hotkeyError = nil
+        case OSStatus(eventHotKeyExistsErr): hotkeyError = "\(hotkey.displayString) is already in use by another app."
+        default: hotkeyError = "macOS refused \(hotkey.displayString) (error \(status))."
+        }
     }
 
     private func startEngine() {

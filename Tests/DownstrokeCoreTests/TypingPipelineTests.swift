@@ -15,7 +15,7 @@ private struct Rig {
     var queue = TriggerQueue()
     var ring: SampleRing
 
-    init(settings: DownstrokeSettings = DownstrokeSettings(), sensorAvailable: Bool = true, bank: SampleBank = sharedBank) {
+    init(settings: DownstrokeSettings = sensing(), sensorAvailable: Bool = true, bank: SampleBank = sharedBank) {
         let queue = TriggerQueue()
         let ring = SampleRing()
         pipeline = TypingPipeline(queue: queue, ring: ring, random: SeededRandom(state: 5))
@@ -68,7 +68,7 @@ private struct Rig {
 }
 
 @Test func immediateWhenSensingOff() {
-    var settings = DownstrokeSettings()
+    var settings = sensing()
     settings.hitStrengthEnabled = false
     let off = Rig(settings: settings)
     off.pipeline.keyEvent(press(at: 1.0), now: 1.0)
@@ -97,7 +97,7 @@ private struct Rig {
 }
 
 @Test func mutedOrDisabledDropsEverything() {
-    var settings = DownstrokeSettings()
+    var settings = sensing()
     settings.mutedBundleIDs = ["com.apple.Terminal"]
     var rig = Rig(settings: settings, sensorAvailable: false)
     rig.pipeline.setContext(frontmostBundleID: "com.apple.Terminal", micInUse: false)
@@ -121,7 +121,7 @@ private struct Rig {
 }
 
 @Test func keyEventReportsWhetherItWasAccepted() {
-    var settings = DownstrokeSettings()
+    var settings = sensing()
     settings.mutedBundleIDs = ["com.apple.Terminal"]
     let rig = Rig(settings: settings)
     #expect(rig.pipeline.keyEvent(press(at: 1.0), now: 1.0))
@@ -132,7 +132,7 @@ private struct Rig {
 }
 
 @Test func disablingSensingFlushesPendingPress() {
-    var settings = DownstrokeSettings()
+    var settings = sensing()
     let rig = Rig(settings: settings)
     rig.pipeline.keyEvent(press(at: 1.0), now: 1.0)
     settings.hitStrengthEnabled = false
@@ -151,7 +151,7 @@ private struct Rig {
 @Test func nilRingPlaysImmediately() {
     let queue = TriggerQueue()
     let pipeline = TypingPipeline(queue: queue, ring: nil)
-    pipeline.update(settings: DownstrokeSettings(), bank: sharedBank, sensorAvailable: true)
+    pipeline.update(settings: sensing(), bank: sharedBank, sensorAvailable: true)
     pipeline.keyEvent(press(at: 1.0), now: 1.0)
     #expect(drain(queue).count == 2)
 }
@@ -160,7 +160,7 @@ private struct Rig {
     let rig = Rig(sensorAvailable: false)
     let other = try SampleBank(board: vendoredBoard("holy-panda"), sampleRate: 48000)
     rig.pipeline.keyEvent(press(at: 1.0), now: 1.0)
-    rig.pipeline.update(settings: DownstrokeSettings(), bank: other, sensorAvailable: false)
+    rig.pipeline.update(settings: sensing(), bank: other, sensorAvailable: false)
     rig.pipeline.keyEvent(press(at: 2.0), now: 2.0)
     let out = drain(rig.queue)
     #expect(out.prefix(2).allSatisfy { $0.bankTag == sharedBank.tag })
@@ -168,7 +168,7 @@ private struct Rig {
 }
 
 @Test func auditionIgnoresMuteRulesAndEnabled() throws {
-    var settings = DownstrokeSettings()
+    var settings = sensing()
     settings.enabled = false
     settings.stereoWidth = 1
     let rig = Rig(settings: settings)
@@ -202,7 +202,7 @@ private struct Rig {
                 switch worker {
                 case 0: rig.pipeline.keyEvent(press(at: t), now: t)
                 case 1: rig.pipeline.tick(now: t)
-                default: rig.pipeline.update(settings: DownstrokeSettings(), bank: sharedBank, sensorAvailable: i % 2 == 0)
+                default: rig.pipeline.update(settings: sensing(), bank: sharedBank, sensorAvailable: i % 2 == 0)
                 }
                 // One consumer only.
                 if worker == 1, i % 50 == 0 { _ = drain(rig.queue) }
@@ -244,15 +244,22 @@ private struct Rig {
     let rig = Rig()
     rig.pipeline.keyEvent(press(at: 1.0), now: 1.0)
     #expect(rig.pipeline.hasPending)
-    rig.pipeline.update(settings: DownstrokeSettings(), bank: sharedBank, sensorAvailable: false)
+    rig.pipeline.update(settings: sensing(), bank: sharedBank, sensorAvailable: false)
     #expect(!rig.pipeline.hasPending)
     #expect(rig.slots() == [.press(.medium), .press(.hard)])
 }
 
 @Test func exposesLatestSettings() {
-    var settings = DownstrokeSettings()
+    var settings = sensing()
     settings.sensitivity = 0.8
     settings.mutedBundleIDs = ["com.example.app"]
     let rig = Rig(settings: settings)
     #expect(rig.pipeline.settings == settings)
+}
+
+// Pipeline tests exercise hit-strength mode, which is off by default.
+private func sensing() -> DownstrokeSettings {
+    var s = DownstrokeSettings()
+    s.hitStrengthEnabled = true
+    return s
 }

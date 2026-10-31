@@ -28,6 +28,8 @@ How hard a key lands changes how it sounds. Downstroke reads the MacBook's built
 
 Each board has several real recordings of ordinary keys (5 to 26, depending on the pack) and usually one each for keys like space and return. At load, Downstroke derives four velocity layers (soft, medium, hard and slam) from every recording. Each press picks one recording and crossfades between that recording's two nearest layers, so strength changes the brightness and weight of the sound, not its pitch or timing. Every press also gets a small random pitch (±3%) and gain (±10%) variation so repeats don't sound robotic.
 
+**Off by default.** On the MacBook Pro (M5 Pro) it was built on, `--probe` measured hard presses no stronger than soft ones (median 11.1 mg hard against 11.9 mg soft), so hit strength ships switched off and every press plays at a fixed medium strength. Turn it on in **Settings › Sound** if `--probe` passes on your Mac.
+
 **The trade-off.** To measure a press, Downstroke has to wait for the key to bottom out, so the sound starts about 8 ms after the key event. That's the price of dynamics. If you'd rather have the fastest possible response, turn it off in **Settings › Sound**. The sound then starts as soon as the key event arrives.
 
 **No sensor, no dynamics.** On a desktop Mac, an Intel Mac, or with an external keyboard (which doesn't shake the laptop's case), there's nothing to measure. Downstroke plays every press at a fixed medium strength and says so in Settings › Diagnostics. It never fakes dynamics.

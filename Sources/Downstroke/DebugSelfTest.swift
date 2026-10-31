@@ -371,6 +371,15 @@ enum DebugSelfTest {
         let rows = state.sections.flatMap(\.rows)
         check(rows.count == 20, "20 board rows (\(rows.count))")
         check(state.status == "Off" && state.fixedStrength, "status Off and fixed strength while disabled")
+        let notes = [
+            PanelState.meterNote(appEnabled: false, accentEnabled: true, sensorStatus: .off),
+            PanelState.meterNote(appEnabled: true, accentEnabled: false, sensorStatus: .off),
+            PanelState.meterNote(appEnabled: true, accentEnabled: true, sensorStatus: .unavailable("no sensor")),
+            PanelState.meterNote(appEnabled: true, accentEnabled: true, sensorStatus: .stalled),
+            PanelState.meterNote(appEnabled: true, accentEnabled: true, sensorStatus: .starting),
+        ]
+        check(notes == ["Off", "Off", "No motion sensor", "No motion sensor", "Starting…"],
+              "meter note says Off only when the accent or app is off (\(notes.joined(separator: ", ")))")
 
         let target = rows.map(\.id).first { $0 != controller.settings.boardID } ?? ""
         menuBar.model.select(target)

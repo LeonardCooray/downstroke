@@ -10,7 +10,7 @@
 ![Swift](https://img.shields.io/badge/Swift-native-F05138?logo=swift&logoColor=white)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue)
 
-<img src="docs/images/hero.png" alt="The Downstroke panel open from the menu bar, showing volume, the hit-strength meter and the board list, next to the Sound settings" width="800">
+<img src="docs/images/hero.png" alt="The Downstroke panel open from the menu bar, showing volume, the slam meter and the board list, next to the Sound settings" width="800">
 
 </div>
 
@@ -52,9 +52,9 @@ There's no update check. To update, download the newer DMG and replace the app i
 
 **Feel, if your Mac can sense it**
 
-- Optional hit strength reads the MacBook's motion sensor, so soft taps sound lighter and hard strikes heavier
-- A live meter in the panel shows how hard each key landed
-- Off by default; see [Hit strength](#hit-strength) for why
+- Slam accent reads the MacBook's motion sensor, so a key hit much harder than usual sounds heavier
+- A live meter in the panel shows each hit against the slam threshold
+- See [Slam accent](#slam-accent) for what the sensor can and can't tell
 
 **Fast, and honest about it**
 
@@ -79,24 +79,26 @@ Autorepeat presses don't play.
 Open **Settings…** from the panel to change:
 
 - **General:** the on/off hotkey, launch at login (off by default, via `SMAppService`) and Quit
-- **Sound:** hit strength and its sensitivity, key-up sounds and stereo width
+- **Sound:** slam accent and its threshold, key-up sounds and stereo width
 - **Apps:** the muted apps list and mute while the microphone is in use
 - **Diagnostics:** latency p50/p99, engine, sensor, output and permission status, with a button to copy it all
 - **About:** the version, credits and licences
 
 Output follows the system default device.
 
-## Hit strength
+## Slam accent
 
-How hard a key lands changes how it sounds. Downstroke reads the MacBook's built-in accelerometer at about 800 Hz (no root needed) and, for each key press, looks at a window from 15 ms before to 8 ms after the key event. The strongest impact in that window, with bumps above 0.3 g rejected, becomes a velocity from 0 to 1.
+Downstroke reads the MacBook's built-in accelerometer at about 800 Hz (no root needed) and, for each key press, looks at a window from 15 ms before to 8 ms after the key event. The strongest impact in that window, after a 5 Hz high-pass filter and with bumps above 0.3 g rejected, is compared with the slam threshold. Below it, the press plays exactly as it would with the accent off. Above it, the sound ramps to the heaviest layer, reaching it at 1.5× the threshold.
 
-Each board has several real recordings of ordinary keys (5 to 26, depending on the pack) and usually one each for keys like space and return. At load, Downstroke derives four velocity layers (soft, medium, hard and slam) from every recording. Each press picks one recording and crossfades between that recording's two nearest layers, so strength changes the brightness and weight of the sound, not its pitch or timing. Every press also gets a small random pitch (±3%) and gain (±10%) variation.
+**Why slams only.** On the MacBook Pro (M5 Pro) it was built on, a raw-sensor recording showed the sensor can't tell ordinary soft typing from ordinary hard typing, but it reliably picks out a deliberate slam: at the default threshold it caught 13 of 16 slams and flagged 3 of 97 other presses. So Downstroke doesn't pretend to measure finer shades than that.
 
-**Off by default.** On the MacBook Pro (M5 Pro) it was built on, `--probe` measured hard presses no stronger than soft ones (median 11.1 mg hard against 11.9 mg soft), so hit strength ships switched off and every press plays at a fixed medium strength. Turn it on in **Settings › Sound** if `--probe` passes on your Mac.
+Each board has several real recordings of ordinary keys (5 to 26, depending on the pack) and usually one each for keys like space and return. At load, Downstroke derives four velocity layers (soft, medium, hard and slam) from every recording. Normal presses crossfade medium and hard; slams move toward the slam layer, which changes the brightness and weight of the sound, not its pitch or timing. Every press also gets a small random pitch (±3%) and gain (±10%) variation.
 
-**Checking the sensor.** `build/Downstroke.app/Contents/MacOS/Downstroke --probe` (run from a terminal) wakes the accelerometer, reads it for a few seconds and checks that hard taps read at least twice as strong as soft ones. Type the taps in another app such as TextEdit: a terminal with Secure Keyboard Entry on hides key presses from the listener.
+**Tuning.** Settings › Sound › Slam threshold runs from Hard to trigger (30 mg) to Easy to trigger (13 mg); the middle is 15.5 mg. The easy end stops at 13 mg because below that ordinary typing starts reading as slams. The panel meter puts the threshold at its centre tick, and bars past it light orange, so you can set it by eye. Settings › Diagnostics counts slams since launch.
 
-**The trade-off.** To measure a press, Downstroke has to wait for the key to bottom out, so with hit strength on the sound starts about 8 ms later. That's the price of dynamics. With it off, the sound starts as soon as the key event arrives.
+**Checking the sensor.** `build/Downstroke.app/Contents/MacOS/Downstroke --probe` (run from a terminal) wakes the accelerometer, then asks for 20 soft presses and 20 slams, and passes when the default threshold catches at least 60% of the slams and at most 10% of the soft presses. Type the presses in another app such as TextEdit: a terminal with Secure Keyboard Entry on hides key presses from the listener.
+
+**The trade-off.** To catch a slam, Downstroke has to wait for the key to bottom out, so with the accent on every sound starts about 8 ms later. Turn it off in Settings › Sound and the sound starts as soon as the key event arrives.
 
 **No sensor, no dynamics.** On a desktop Mac, an Intel Mac, or with an external keyboard (which doesn't shake the laptop's case), there's nothing to measure. Downstroke plays every press at a fixed medium strength and says so in Settings › Diagnostics. It never fakes dynamics.
 
@@ -104,12 +106,12 @@ Each board has several real recordings of ordinary keys (5 to 26, depending on t
 
 The audio side is a lock-free real-time mixer: a fixed pool of 48 voices, all samples decoded into memory at startup, and a 128-frame I/O buffer request. Key events reach the render thread through a lock-free queue, and the render thread never allocates, waits, logs or touches the disk. When all voices are busy, the oldest is stolen.
 
-After 60 seconds with no key press, no audition and nothing still sounding, the audio engine pauses (the motion sensor keeps running, so hit strength still works). The next key restarts it without ever holding up the key listener. That one key still plays, late by the output device's restart time: about 35 ms on the built-in speakers (so about 37 ms from press to sound, against the usual 5 ms with hit strength off or 14 ms with it on), and longer on Bluetooth. Every key after it is back to normal. Settings › Diagnostics shows the engine as Running, Paused (idle) or Off.
+After 60 seconds with no key press, no audition and nothing still sounding, the audio engine pauses (the motion sensor keeps running, so the slam accent still works). The next key restarts it without ever holding up the key listener. That one key still plays, late by the output device's restart time: about 35 ms on the built-in speakers (so about 37 ms from press to sound, against the usual 5 ms with the slam accent off or 14 ms with it on), and longer on Bluetooth. Every key after it is back to normal. Settings › Diagnostics shows the engine as Running, Paused (idle) or Off.
 
 `build/Downstroke.app/Contents/MacOS/Downstroke --bench` replays synthetic key events through the real engine and pipeline and checks these budgets:
 
-- Latency from key event to the start of the render cycle that plays it, p99: at most 3 ms plus the buffer with hit strength off, and at most 8 + 3 ms plus the buffer with it on.
-- Idle CPU: at most 1.0% of a core with hit strength off (engine running), and 1.5% with it on, measured with the engine paused after the idle timeout (macOS's HID path for the 800 Hz sensor costs about 1% by itself).
+- Latency from key event to the start of the render cycle that plays it, p99: at most 3 ms plus the buffer with the slam accent off, and at most 8 + 3 ms plus the buffer with it on.
+- Idle CPU: at most 1.0% of a core with the slam accent off (engine running), and 1.5% with it on, measured with the engine paused after the idle timeout (macOS's HID path for the 800 Hz sensor costs about 1% by itself).
 - First key after an idle pause, from key event to the start of the render cycle that plays it, p99: at most 50 ms.
 - Typing CPU: at most 3%.
 - Memory: at most 100 MB with all 20 boards loaded.

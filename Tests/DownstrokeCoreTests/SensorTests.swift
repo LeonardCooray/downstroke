@@ -57,6 +57,16 @@ private func makeRing(_ samples: [AccelSample]) -> SampleRing {
         #expect(outputs.suffix(400).allSatisfy { $0 < 0.0005 })
     }
 
+    @Test func defaultFilterKeepsSlowChassisMotion() {
+        var filter = ImpactFilter()
+        let outputs = (0..<1600).map { i in
+            let t = Double(i) / sampleRate
+            return filter.process(AccelSample(time: t, x: 0, y: 0, z: Float(1 + 0.01 * sin(2 * Double.pi * 10 * t))))
+        }
+        let settled = outputs.suffix(800).max()!
+        #expect(settled > 0.009 && settled < 0.0115)
+    }
+
     @Test func peakFindsBottomOutInsideWindow() throws {
         let keyTime = 0.5
         let ring = makeRing(makeSamples(duration: 0.7, impulseAt: keyTime + 0.007, amplitude: 0.012))

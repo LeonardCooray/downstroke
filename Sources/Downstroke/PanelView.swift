@@ -28,10 +28,10 @@ struct PanelContent: View {
             }
             SectionLabel("Volume").padding(.top, 14)
             volume
-            SectionLabel("Hit strength").padding(.top, 12)
+            SectionLabel("Slam accent").padding(.top, 12)
             Group {
                 if state.fixedStrength {
-                    Text("Fixed strength")
+                    Text(state.meterNote)
                         .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
@@ -193,7 +193,7 @@ private struct PermissionBanner: View {
     }
 }
 
-/// 16 rising bars, lit left to right by the last hit's strength.
+/// 16 rising bars lit by the last hit; the right half, past the threshold tick, means a slam.
 private struct HitMeter: View {
     static let height: CGFloat = 22
     @ObservedObject var meter: MeterModel
@@ -202,14 +202,22 @@ private struct HitMeter: View {
         HStack(alignment: .bottom, spacing: 3) {
             ForEach(0..<MeterModel.segments, id: \.self) { i in
                 RoundedRectangle(cornerRadius: 1.5)
-                    .fill(i < meter.lit ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.quaternary))
+                    .fill(Self.style(segment: i, lit: meter.lit))
                     .frame(height: 7 + CGFloat(i) / CGFloat(MeterModel.segments - 1) * (Self.height - 7))
             }
         }
+        .overlay {
+            Rectangle().fill(.secondary).frame(width: 1, height: Self.height)
+        }
         .frame(height: Self.height, alignment: .bottom)
         .accessibilityElement()
-        .accessibilityLabel("Hit strength")
-        .accessibilityValue("\(meter.lit) of \(MeterModel.segments)")
+        .accessibilityLabel("Last hit against slam threshold")
+        .accessibilityValue("\(meter.lit) of \(MeterModel.segments)\(meter.lit > MeterModel.segments / 2 ? ", slam" : "")")
+    }
+
+    static func style(segment i: Int, lit: Int) -> AnyShapeStyle {
+        guard i < lit else { return AnyShapeStyle(.quaternary) }
+        return i >= MeterModel.segments / 2 ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary)
     }
 }
 

@@ -5,7 +5,7 @@ public final class TypingPipeline: @unchecked Sendable {
     // How long after a press its hit window is complete, and when to give up waiting for it.
     private static let windowDelay = 0.008
     private static let flushDelay = 0.012
-    private static let fixedVelocity: Float = 0.5
+    private static let fixedVelocity = SlamMapper.normalVelocity
 
     private struct State {
         var settings = DownstrokeSettings()
@@ -24,8 +24,9 @@ public final class TypingPipeline: @unchecked Sendable {
     private let state: Mutex<State>
     // Mirrors `!pending.isEmpty`, written under the lock, so idle ticks skip it.
     private let pendingFlag = Atomic<Bool>(false)
-    // Press count in the high 32 bits, velocity bit pattern in the low 32.
+    // Press count in the high 32 bits, meter level bit pattern in the low 32.
     private let pressStamp = Atomic<UInt64>(0)
+    private let slams = Atomic<Int>(0)
 
     public init(queue: TriggerQueue, ring: SampleRing?, random: sending any RandomNumberGenerator = SystemRandomNumberGenerator()) {
         self.queue = queue
@@ -93,11 +94,14 @@ public final class TypingPipeline: @unchecked Sendable {
     /// Velocity of the latest played press, nil before the first.
     public var lastVelocity: Float? { state.withLock { $0.lastVelocity } }
 
-    /// Lock-free count and velocity of played presses, for a live meter; a new count means a new press.
-    public var lastPress: (count: UInt32, velocity: Float) {
+    /// Lock-free count and meter level of played presses; a new count means a new press, level 0.5 is the slam threshold.
+    public var lastPress: (count: UInt32, level: Float) {
         let stamp = pressStamp.load(ordering: .acquiring)
         return (UInt32(truncatingIfNeeded: stamp >> 32), Float(bitPattern: UInt32(truncatingIfNeeded: stamp)))
     }
+
+    /// Presses played heavier than normal since launch.
+    public var slamCount: Int { slams.load(ordering: .relaxed) }
 
     /// Plays a fixed A-key press, ignoring `enabled` and the mute rules.
     public func audition(boardBank: SampleBank) {
@@ -126,15 +130,16 @@ public final class TypingPipeline: @unchecked Sendable {
                 continue
             }
             guard now >= e.time + Self.windowDelay else { return }
-            var velocity: Float?
+            var hit: (velocity: Float, level: Float)?
             if let ring, let peak = ImpactAnalyzer.peak(in: ring, keyTime: e.time) {
-                velocity = VelocityMapper(sensitivity: s.settings.sensitivity).velocity(forPeak: peak) ?? Self.fixedVelocity
+                let mapper = SlamMapper(sensitivity: s.settings.sensitivity)
+                hit = (mapper.velocity(forPeak: peak), mapper.meterLevel(forPeak: peak))
             } else if now >= e.time + Self.flushDelay {
-                velocity = Self.fixedVelocity
+                hit = (Self.fixedVelocity, 0)
             }
-            guard let velocity else { return }
+            guard let hit else { return }
             s.pending.removeFirst()
-            emit(e, velocity: velocity, &s)
+            emit(e, velocity: hit.velocity, level: hit.level, &s)
         }
     }
 
@@ -144,12 +149,13 @@ public final class TypingPipeline: @unchecked Sendable {
         for e in events { emit(e, velocity: Self.fixedVelocity, &s) }
     }
 
-    private func emit(_ e: KeyEvent, velocity: Float, _ s: inout State) {
+    private func emit(_ e: KeyEvent, velocity: Float, level: Float = 0, _ s: inout State) {
         guard let bank = s.bank else { return }
         if !e.isRelease {
             s.lastVelocity = velocity
+            if velocity > Self.fixedVelocity { slams.add(1, ordering: .relaxed) }
             let count = (pressStamp.load(ordering: .relaxed) >> 32) &+ 1
-            pressStamp.store(count << 32 | UInt64(velocity.bitPattern), ordering: .releasing)
+            pressStamp.store(count << 32 | UInt64(level.bitPattern), ordering: .releasing)
         }
         for t in s.planner.plan(e, velocity: velocity, bank: bank, settings: s.settings) { _ = queue.push(t) }
     }

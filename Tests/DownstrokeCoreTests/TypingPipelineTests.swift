@@ -237,7 +237,7 @@ private struct Rig {
     rig.pipeline.keyEvent(release(at: 1.05), now: 1.05)
     rig.pipeline.keyEvent(press(at: 1.1), now: 1.1)
     #expect(rig.pipeline.lastPress.count == 2)
-    #expect(rig.pipeline.lastPress.velocity == 0.5)
+    #expect(rig.pipeline.lastPress.level == 0)
 }
 
 @Test func turningSensingOffFlushesAndClearsPending() {
@@ -257,9 +257,51 @@ private struct Rig {
     #expect(rig.pipeline.settings == settings)
 }
 
-// Pipeline tests exercise hit-strength mode, which is off by default.
+// Pipeline tests run with the slam accent on.
 private func sensing() -> DownstrokeSettings {
     var s = DownstrokeSettings()
     s.hitStrengthEnabled = true
     return s
+}
+
+@Test func normalHitPlaysFixedStrengthAndShowsItsLevel() {
+    let rig = Rig()
+    rig.ring.append(time: 1.0, impact: 0.010)
+    rig.ring.append(time: 1.009, impact: 0.001)
+    rig.pipeline.keyEvent(press(at: 1.0), now: 1.0)
+    rig.pipeline.tick(now: 1.0085)
+    #expect(rig.slots() == [.press(.medium), .press(.hard)])
+    #expect(abs(rig.pipeline.lastPress.level - 0.010 / (2 * SlamMapper(sensitivity: 0.5).threshold)) < 1e-5)
+    #expect(rig.pipeline.slamCount == 0)
+}
+
+@Test func slamPlaysTheSlamLayerAndCounts() {
+    let rig = Rig()
+    rig.ring.append(time: 1.0, impact: 0.05)
+    rig.ring.append(time: 1.009, impact: 0.001)
+    rig.pipeline.keyEvent(press(at: 1.0), now: 1.0)
+    rig.pipeline.tick(now: 1.0085)
+    #expect(rig.slots() == [.press(.slam)])
+    #expect(rig.pipeline.lastPress.level == 1)
+    #expect(rig.pipeline.slamCount == 1)
+}
+
+@Test func bumpPlaysNormalWithoutCountingOrShowing() {
+    let rig = Rig()
+    rig.ring.append(time: 1.0, impact: 0.5)
+    rig.ring.append(time: 1.009, impact: 0.001)
+    rig.pipeline.keyEvent(press(at: 1.0), now: 1.0)
+    rig.pipeline.tick(now: 1.0085)
+    #expect(rig.slots() == [.press(.medium), .press(.hard)])
+    #expect(rig.pipeline.lastPress.level == 0)
+    #expect(rig.pipeline.slamCount == 0)
+}
+
+@Test func giveUpPlaysNormalWithoutCountingOrShowing() {
+    let rig = Rig()
+    rig.pipeline.keyEvent(press(at: 1.0), now: 1.0)
+    rig.pipeline.tick(now: 1.0121)
+    #expect(rig.slots() == [.press(.medium), .press(.hard)])
+    #expect(rig.pipeline.lastPress.level == 0)
+    #expect(rig.pipeline.slamCount == 0)
 }

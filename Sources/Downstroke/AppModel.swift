@@ -22,9 +22,19 @@ struct PanelState: Equatable {
     var permissionMissing: Bool
     var volume: Float
     var fixedStrength: Bool
+    var meterNote = "Off"
     var sections: [Section]
     var currentBoardID: String
     var footer: String
+
+    /// What the meter row says when it can't show a hit.
+    static func meterNote(appEnabled: Bool, accentEnabled: Bool, sensorStatus: SensorStatus) -> String {
+        guard appEnabled && accentEnabled else { return "Off" }
+        switch sensorStatus {
+        case .starting, .streaming: return "Starting…"
+        case .off, .stalled, .unavailable: return "No motion sensor"
+        }
+    }
 
     @MainActor
     init(_ c: AppController) {
@@ -41,6 +51,7 @@ struct PanelState: Equatable {
             boardName: boardName, hotkeyUnavailable: c.hotkeyError != nil, appName: Self.appName)
         // Same condition the pipeline uses, so the meter never animates over fixed-strength presses.
         fixedStrength = !(c.sensorAvailable && s.hitStrengthEnabled)
+        meterNote = Self.meterNote(appEnabled: s.enabled, accentEnabled: s.hitStrengthEnabled, sensorStatus: c.sensorStatus)
         footer = Self.footer(p50: c.latencyP50, bluetooth: c.outputIsBluetooth)
     }
 
@@ -107,10 +118,10 @@ final class MeterModel: ObservableObject {
         if lit != 0 { lit = 0 }
     }
 
-    func step(press: (count: UInt32, velocity: Float), now: Double) {
+    func step(press: (count: UInt32, level: Float), now: Double) {
         if press.count != seenCount {
             seenCount = press.count
-            peak = press.velocity
+            peak = press.level
             peakAt = now
         }
         let level = peak * Float(max(0, 1 - (now - peakAt) / Self.decay))

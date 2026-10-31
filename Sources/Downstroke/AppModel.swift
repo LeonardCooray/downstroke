@@ -144,8 +144,10 @@ final class PanelModel: NSObject, ObservableObject {
 
     // MARK: Panel lifecycle
 
+    /// Before the panel orders front, so its first frame already scrolls to the current board.
+    func willOpen() { openCount += 1 }
+
     func opened(on view: NSView) {
-        openCount += 1
         meter.reset(count: controller.pipeline.lastPress.count)
         let link = view.displayLink(target: self, selector: #selector(tick(_:)))
         link.preferredFrameRateRange = CAFrameRateRange(minimum: 30, maximum: 60, preferred: 60)
@@ -185,6 +187,13 @@ final class PanelModel: NSObject, ObservableObject {
             hoveredBoard = nil
         }
     }
+
+    #if DEBUG
+    func debugForceHover(_ id: String?) {
+        cancelHover()
+        hoveredBoard = id
+    }
+    #endif
 
     func play(_ id: String) {
         cancelHover()

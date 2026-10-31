@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import DownstrokeCore
 import SwiftUI
 
 @MainActor
@@ -10,6 +11,8 @@ final class MenuBarController: NSObject {
     private let controller: AppController
     private var monitors: [Any] = []
     private var observers: [any NSObjectProtocol] = []
+    private var resignObserver: (any NSObjectProtocol)?
+    private var resignedAt = -Double.infinity
     private var enabledSink: AnyCancellable?
 
     init(controller: AppController) {
@@ -31,12 +34,16 @@ final class MenuBarController: NSObject {
     }
 
     @objc private func togglePanel() {
-        panel.isVisible ? hidePanel() : showPanel()
+        if panel.isVisible { return hidePanel() }
+        // A click on the status item that just took key from the panel closes it, not reopens it.
+        guard MonotonicClock.now() - resignedAt > 0.3 else { return }
+        showPanel()
     }
 
     func showPanel() {
         guard !panel.isVisible, let button = statusItem.button, let window = button.window else { return }
         let anchor = window.convertToScreen(button.convert(button.bounds, to: nil))
+        model.willOpen()
         panel.show(below: anchor, on: window.screen ?? NSScreen.main)
         button.highlight(true)
         model.opened(on: panel.contentView ?? button)
@@ -52,6 +59,8 @@ final class MenuBarController: NSObject {
         monitors.removeAll()
         observers.forEach(NSWorkspace.shared.notificationCenter.removeObserver)
         observers.removeAll()
+        if let resignObserver { NotificationCenter.default.removeObserver(resignObserver) }
+        resignObserver = nil
     }
 
     private func installMonitors() {
@@ -71,12 +80,22 @@ final class MenuBarController: NSObject {
                 hidePanel()
                 return nil
             }
-            if flags == .command && event.charactersIgnoringModifiers == "," {
+            if event.keyCode == 43 && flags == .command {
                 model.openSettings()
                 return nil
             }
             return event
         }) { monitors.append(m) }
+        // ⌘-Tab, Spotlight or a notification click takes key away: close like a menu.
+        resignObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didResignKeyNotification, object: panel, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self, self.panel.isVisible else { return }
+                self.resignedAt = MonotonicClock.now()
+                self.hidePanel()
+            }
+        }
         observers.append(NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main
         ) { [weak self] _ in

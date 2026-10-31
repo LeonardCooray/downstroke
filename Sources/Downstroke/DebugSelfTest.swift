@@ -177,6 +177,15 @@ enum DebugSelfTest {
         check(settingsOpened == 1, "Cmd-comma opens Settings (\(settingsOpened) calls)")
         check(!menuBar.panel.isVisible, "opening Settings closes the panel")
 
+        menuBar.showPanel()
+        try? await Task.sleep(for: .milliseconds(100))
+        let other = NSPanel(contentRect: NSRect(x: -9000, y: -9000, width: 40, height: 40), styleMask: [.nonactivatingPanel, .titled], backing: .buffered, defer: false)
+        other.makeKeyAndOrderFront(nil)
+        try? await Task.sleep(for: .milliseconds(150))
+        check(!menuBar.panel.isVisible, "losing key status closes the panel")
+        other.orderOut(nil)
+        check(settingsOpened == 1, "still exactly one Settings call (\(settingsOpened))")
+
         var times: [Double] = []
         for _ in 0..<5 {
             let t = MonotonicClock.now()
@@ -242,12 +251,15 @@ enum DebugSelfTest {
             ("permission-dark", permission, .darkAqua), ("scrolled-dark", scrolled, .darkAqua),
         ]
         for (name, state, appearance) in shots {
-            model.hover("topre", inside: name == "light")
+            model.debugForceHover(nil)
             let panel = PopoverPanel(content: PanelContent(state: state, model: model))
             panel.appearance = NSAppearance(named: appearance)
             let screen = NSScreen.main!.visibleFrame
             panel.show(below: NSRect(x: screen.minX + 40, y: screen.maxY, width: 24, height: 0), on: NSScreen.main)
-            try? await Task.sleep(for: .milliseconds(400))
+            try? await Task.sleep(for: .milliseconds(300))
+            // Forced after the tracking areas settle, which report the real pointer as outside.
+            if name == "light" { model.debugForceHover("topre") }
+            try? await Task.sleep(for: .milliseconds(200))
             let file = out.appendingPathComponent("panel-\(name).png")
             check(renderOffscreen(panel, dark: appearance == .darkAqua, to: file), "rendered \(file.path)")
             let window = out.appendingPathComponent("panel-window-\(name).png")

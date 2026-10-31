@@ -134,7 +134,6 @@ struct PanelContent: View {
             }
             .buttonStyle(.plain)
             .focusable(false)
-            .keyboardShortcut(",", modifiers: .command)
             .accessibilityIdentifier("settings")
         }
         .font(.system(size: 11))
@@ -260,6 +259,7 @@ private struct BoardRow: View {
         .accessibilityAddTraits(current ? [.isButton, .isSelected] : .isButton)
         .accessibilityIdentifier("board.\(row.id)")
         .accessibilityAction { model.select(row.id) }
+        .accessibilityAction(named: "Preview") { model.play(row.id) }
     }
 }
 

@@ -151,6 +151,12 @@ enum DebugSelfTest {
             check(woke != nil && engine.isRunning, "\(name): key wakes the engine and its press reaches the latency readout")
             if let p50 = controller.latencyP50, count == 0 {
                 check(p50 > 0 && p50 < 0.25, String(format: "\(name): first key after the pause plays, late by %.2f ms (output time)", p50 * 1000))
+                // With two presses the nearest-rank p50 is the smaller, so the second key's.
+                try? await Task.sleep(for: .milliseconds(100))
+                press { controller.simulateKeyEvent($0) }
+                _ = await waitUntil(1) { controller.latencyCount > 1 }
+                let second = controller.latencyCount == 2 ? controller.latencyP50 ?? 1 : 1
+                check(second < 0.015, String(format: "\(name): the next key is back to normal (%.2f ms)", second * 1000))
             }
             if let wake = idler.lastWake {
                 print(String(format: "  wake hop to main %.2f ms, engine start %.2f ms", wake.hop * 1000, wake.start * 1000))

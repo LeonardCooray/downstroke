@@ -36,7 +36,7 @@ Each board has several real recordings of ordinary keys (5 to 26, depending on t
 
 The audio side is a lock-free real-time mixer: a fixed pool of 48 voices, all samples decoded into memory at startup, and a 128-frame I/O buffer request. Key events reach the render thread through a lock-free queue, and the render thread never allocates, waits, logs or touches the disk. When all voices are busy, the oldest is stolen.
 
-After 60 seconds with no key press, no audition and nothing still sounding, the audio engine pauses (the motion sensor keeps running, so hit strength still works). The next key restarts it without ever holding up the key listener: that one key plays about 35 ms late, and every key after it is back to normal. Settings › Diagnostics shows the engine as Running, Paused (idle) or Off.
+After 60 seconds with no key press, no audition and nothing still sounding, the audio engine pauses (the motion sensor keeps running, so hit strength still works). The next key restarts it without ever holding up the key listener: that one key sounds about 37 ms after the press instead of the usual 5 ms, and every key after it is back to normal. Settings › Diagnostics shows the engine as Running, Paused (idle) or Off.
 
 `build/Downstroke.app/Contents/MacOS/Downstroke --bench` replays synthetic key events through the real engine and pipeline and checks these budgets:
 

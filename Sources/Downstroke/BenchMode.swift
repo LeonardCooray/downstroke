@@ -179,7 +179,7 @@ enum BenchMode {
         }
 
         // The real MotionSensor, wired as AppController wires it; it needs no Input Monitoring.
-        var realRunning: Double?, realPaused: Double?, realOther: Double?, realRate = 0.0, realError: String?
+        var realRunning: Double?, realPaused: Double?, realOther: Double?, realRate = 0.0, realError: String?, pauseError: String?
         do {
             settings.hitStrengthEnabled = true
             rig.pipeline.update(settings: settings, bank: bank, sensorAvailable: true)
@@ -200,7 +200,10 @@ enum BenchMode {
                 for mode in [chosenMode, otherMode] {
                     rig.engine.idleMode = mode
                     try rig.idler.start()
-                    guard await idlePause(rig) else { throw BenchError("engine did not pause after \(idleTimeout) s idle (\(mode.name))") }
+                    guard await idlePause(rig) else {
+                        pauseError = "engine did not pause after \(idleTimeout) s idle (\(mode.name))"
+                        throw BenchError(pauseError!)
+                    }
                     let cpu = await cpuPercent { try? await Task.sleep(for: .seconds(seconds)) }
                     if mode == chosenMode { realPaused = cpu } else { realOther = cpu }
                 }
@@ -250,13 +253,16 @@ enum BenchMode {
         print("info stale triggers dropped: \(rig.mixer.staleTriggers) (latency samples are key presses only, one per press)")
         let first = "first key after an idle pause"
         latencyLine("\(first), key event to render-cycle start (hit strength off, idled with \(chosenMode.name))",
-                    wakeChosen.latencies.map { $0 - minLead }, budget: 0.050)
+                    wakeChosen.latencies.map { $0 - minLead }, budget: 0.050, minCount: 10)
         info("\(first), key event to output time, \(chosenMode.name)", wakeChosen.latencies)
         info("\(first), engine start() call, \(chosenMode.name)", wakeChosen.starts)
         info("\(first), key event to render-cycle start, \(otherMode.name) instead", wakeOther.latencies.map { $0 - minLead })
         info("\(first), key event to output time, \(otherMode.name) instead", wakeOther.latencies)
         info("\(first), engine start() call, \(otherMode.name) instead", wakeOther.starts)
         print("info idle pauses and wakes: \(wakeChosen.wakes) with \(chosenMode.name), \(wakeOther.wakes) with \(otherMode.name); stale triggers dropped now \(rig.mixer.staleTriggers)")
+        for (wakes, mode) in [(wakeChosen, chosenMode), (wakeOther, otherMode)] where wakes.pauseFailed {
+            check(false, "engine did not pause after \(idleTimeout) s idle during the first-key samples (\(mode.name))")
+        }
         cpuLine("idle CPU, engine running (hit strength off)", idle, budget: 1.0)
         print(String(format: "info idle CPU, engine + synthetic 800 Hz sensor: %.2f%% of a core (not checked)", syntheticIdle))
         if let realRunning, let realPaused, let realOther, realRate >= 700 {
@@ -266,8 +272,12 @@ enum BenchMode {
             print(String(format: "info idle CPU, engine running + real sensor: %.2f%% of a core (not checked; before the idle pause)", realRunning))
             print(String(format: "info idle CPU, real sensor, engine idled with %@ instead: %.2f%% of a core (not checked)", otherMode.name, realOther))
         } else {
-            let reason = realError ?? String(format: "sensor delivered %.0f Hz, below 700 Hz", realRate)
-            print("SKIP idle CPU, engine + real sensor: \(reason); the hit-strength-on idle budget (1.5%) was not checked")
+            if let pauseError {
+                check(false, "idle CPU, engine + real sensor, engine idle-paused: \(pauseError)")
+            } else {
+                let reason = realError ?? String(format: "sensor delivered %.0f Hz, below 700 Hz", realRate)
+                print("SKIP idle CPU, engine + real sensor: \(reason); the hit-strength-on idle budget (1.5%) was not checked")
+            }
         }
         cpuLine("typing CPU, hit strength off", off.cpu, budget: 3.0)
         cpuLine("typing CPU, hit strength on (synthetic sensor)", on.cpu, budget: 3.0)
@@ -327,6 +337,7 @@ enum BenchMode {
         var latencies: [Double] = []
         var starts: [Double] = []
         var wakes = 0
+        var pauseFailed = false
     }
 
     // Each sample: wait for the idle pause, press once on a key-tap-like thread, take that press's latency.
@@ -339,8 +350,12 @@ enum BenchMode {
         let handler = rig.keyHandler
         _ = rig.drainLatencies()
         for _ in 0..<wakeSamples {
-            guard await idlePause(rig) else { break }
+            guard await idlePause(rig) else {
+                result.pauseFailed = true
+                break
+            }
             try? await Task.sleep(for: .seconds(pausedDwell))
+            let wakesBefore = rig.idler.wakes
             let thread = Thread {
                 let now = MonotonicClock.now()
                 handler(KeyEvent(time: now, keyCode: 0, isRelease: false, isModifier: false))
@@ -354,7 +369,7 @@ enum BenchMode {
                 sample = rig.drainLatencies()
             }
             result.latencies += sample
-            if let wake = rig.idler.lastWake { result.starts.append(wake.start) }
+            if rig.idler.wakes > wakesBefore, rig.engine.isRunning, let wake = rig.idler.lastWake { result.starts.append(wake.start) }
         }
         result.wakes = rig.idler.wakes - wakes0
         rig.idler.timeout = .infinity
@@ -408,9 +423,9 @@ enum BenchMode {
         sorted[min(max(Int((p * Double(sorted.count) - 1e-9).rounded(.up)), 1), sorted.count) - 1]
     }
 
-    private static func latencyLine(_ name: String, _ values: [Double], budget: Double) {
+    private static func latencyLine(_ name: String, _ values: [Double], budget: Double, minCount: Int = 1) {
         let sorted = values.sorted()
-        guard !sorted.isEmpty else { return check(false, "\(name): no latency samples") }
+        guard sorted.count >= minCount, !sorted.isEmpty else { return check(false, "\(name): \(sorted.count) latency samples, need \(minCount)") }
         let p99 = rank(sorted, 0.99)
         check(p99 <= budget, String(format: "%@ %.2f ms (budget %.2f ms; p50 %.2f ms, max %.2f ms, n=%d)",
                                     name, p99 * 1000, budget * 1000, rank(sorted, 0.5) * 1000, sorted.last! * 1000, sorted.count))

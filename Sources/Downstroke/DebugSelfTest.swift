@@ -149,15 +149,13 @@ enum DebugSelfTest {
             press { controller.simulateKeyEvent($0) }
             let woke = await waitUntil(1) { controller.latencyCount > count }
             check(woke != nil && engine.isRunning, "\(name): key wakes the engine and its press reaches the latency readout")
-            if let p50 = controller.latencyP50, count == 0 {
-                check(p50 > 0 && p50 < 0.25, String(format: "\(name): first key after the pause plays, late by %.2f ms (output time)", p50 * 1000))
-                // With two presses the nearest-rank p50 is the smaller, so the second key's.
-                try? await Task.sleep(for: .milliseconds(100))
-                press { controller.simulateKeyEvent($0) }
-                _ = await waitUntil(1) { controller.latencyCount > 1 }
-                let second = controller.latencyCount == 2 ? controller.latencyP50 ?? 1 : 1
-                check(second < 0.015, String(format: "\(name): the next key is back to normal (%.2f ms)", second * 1000))
-            }
+            let first = woke != nil ? controller.lastLatency ?? 1 : 1
+            check(first > 0 && first < 0.05, String(format: "\(name): first key after the pause plays within 50 ms (%.2f ms, output time)", first * 1000))
+            try? await Task.sleep(for: .milliseconds(100))
+            press { controller.simulateKeyEvent($0) }
+            let next = await waitUntil(1) { controller.latencyCount > count + 1 }
+            let second = next != nil ? controller.lastLatency ?? 1 : 1
+            check(second < 0.015, String(format: "\(name): the next key is back to normal (%.2f ms)", second * 1000))
             if let wake = idler.lastWake {
                 print(String(format: "  wake hop to main %.2f ms, engine start %.2f ms", wake.hop * 1000, wake.start * 1000))
             }
@@ -208,13 +206,54 @@ enum DebugSelfTest {
         guard await waitPaused(4) != nil else { return check(false, "engine pauses after the audition") }
         let before = engine.engineIdentity
         var reconfigures = 0
-        engine.onReconfigure = { reconfigures += 1 }
+        let realReconfigure = engine.onReconfigure
+        engine.onReconfigure = {
+            reconfigures += 1
+            realReconfigure?()
+        }
         engine.simulateConfigurationChange()
         try? await Task.sleep(for: .milliseconds(150))
         check(reconfigures == 1 && engine.engineIdentity != before, "configuration change while paused rebuilds the engine")
         check(idler.status == .paused && !engine.isRunning, "and it stays paused, not running")
         await pressAndMeasure("after a configuration change while paused")
         check(engine.sampleRate > 0 && engine.ioBufferFrames > 0, "rebuilt engine at \(Int(engine.sampleRate)) Hz, \(engine.ioBufferFrames) frames")
+
+        // A restart slower than the 0.25 s stale guard still plays the waking key.
+        guard await waitPaused() != nil else { return check(false, "engine pauses before the slow-restart check") }
+        let staleBefore = controller.mixer.staleTriggers, countBefore = controller.latencyCount
+        engine.simulatedStartDelay = 0.4
+        press { controller.simulateKeyEvent($0) }
+        let slow = await waitUntil(2) { controller.latencyCount > countBefore }
+        engine.simulatedStartDelay = 0
+        let slowLatency = slow != nil ? controller.lastLatency ?? 0 : 0
+        check(slow != nil && slowLatency > 0.25 && controller.mixer.staleTriggers == staleBefore,
+              String(format: "a 0.4 s restart still plays the waking key (%.2f ms, none dropped as stale)", slowLatency * 1000))
+        try? await Task.sleep(for: .milliseconds(600))
+        check(!controller.mixer.hasWakeMark, "the wake mark clears once the engine has rendered")
+
+        // A failed wake reads Off and retries at most once a second.
+        guard await waitPaused() != nil else { return check(false, "engine pauses before the failed-wake check") }
+        let attempts = idler.wakes, staleBeforeFail = controller.mixer.staleTriggers
+        engine.simulatedStartFailure = NSError(domain: "DownstrokeSelfTest", code: 1, userInfo: [NSLocalizedDescriptionKey: "simulated start failure"])
+        press { controller.simulateKeyEvent($0) }
+        _ = await waitUntil(1) { idler.wakes > attempts }
+        diagnostics.sample()
+        check(idler.wakes == attempts + 1 && idler.status == .off && diagnostics.snapshot.engine == "Off"
+              && diagnostics.snapshot.engineHealth == .warning && controller.engineError != nil,
+              "a failed wake shows Off (orange) with the error (\(controller.engineError ?? "no error"))")
+        press { controller.simulateKeyEvent($0) }
+        try? await Task.sleep(for: .milliseconds(200))
+        check(idler.wakes == attempts + 1 && !engine.isRunning, "a second key within 1 s doesn't retry the start")
+        engine.simulatedStartFailure = nil
+        try? await Task.sleep(for: .milliseconds(900))
+        let countRetry = controller.latencyCount
+        press { controller.simulateKeyEvent($0) }
+        let retried = await waitUntil(1) { controller.latencyCount > countRetry }
+        check(retried != nil && engine.isRunning && idler.wakes == attempts + 2 && controller.engineError == nil,
+              "after a second, the next key retries, starts the engine and plays")
+        try? await Task.sleep(for: .milliseconds(300))
+        check(controller.latencyCount == countRetry + 1 && controller.mixer.staleTriggers > staleBeforeFail,
+              "the two keys that hit the failed engine are dropped as stale, not replayed (\(controller.mixer.staleTriggers - staleBeforeFail) triggers dropped)")
 
         guard await waitPaused() != nil else { return check(false, "engine pauses before the disable check") }
         controller.setEnabled(false)

@@ -1,15 +1,18 @@
 import DownstrokeCore
 import Foundation
 
-/// Pauses the engine after `timeout` seconds with no key, audition or sounding voice, and wakes it on the next one.
+/// Pauses the engine after `timeout` idle seconds; the next key or audition wakes it.
 @MainActor
 final class EngineIdler {
     enum Status: Equatable { case running, paused, off }
 
     nonisolated let gate: EngineIdleGate
     let engine: AudioEngine
-    private let mixer: VoiceMixer
+    nonisolated private let mixer: VoiceMixer
+    /// Wake start attempts.
     private(set) var wakes = 0
+    private var lastFailedWake: Double?
+    private var markRenders: Int?
     /// Seconds from the waking activity to the main thread taking it, and the engine start that followed.
     private(set) var lastWake: (hop: Double, start: Double)?
     /// Main thread, after each wake's start attempt.
@@ -26,21 +29,23 @@ final class EngineIdler {
         set { gate.timeout = newValue }
     }
 
-    var status: Status { engine.isRunning ? .running : engine.isPaused ? .paused : .off }
+    /// A failed wake reads as off until a start succeeds.
+    var status: Status { engine.isRunning ? .running : engine.isPaused && lastFailedWake == nil ? .paused : .off }
 
     /// The key tap's handler, shared with the bench: pipeline, then the wake, then the fallback tick.
     nonisolated static func keyHandler(pipeline: TypingPipeline, ticker: PendingTicker,
                                        idler: EngineIdler) -> @Sendable (KeyEvent) -> Void {
         { e in
-            if pipeline.keyEvent(e, now: MonotonicClock.now()) { idler.noteActivity() }
+            if pipeline.keyEvent(e, now: MonotonicClock.now()) { idler.noteActivity(keyTime: e.time) }
             ticker.keyHandled()
         }
     }
 
-    /// Any thread; never blocks. The first activity after a pause hops a wake to main.
-    nonisolated func noteActivity() {
+    /// Any thread; never blocks. The first key after a pause marks itself unstale and hops a wake to main.
+    nonisolated func noteActivity(keyTime: Double) {
         let now = MonotonicClock.now()
         guard gate.noteActivity(now: now) else { return }
+        mixer.setWakeMark(keyTime)
         DispatchQueue.main.async { [self] in
             MainActor.assumeIsolated { wake(since: now) }
         }
@@ -51,32 +56,56 @@ final class EngineIdler {
         _ = gate.noteActivity(now: MonotonicClock.now())
         gate.unpark()
         try engine.start()
+        lastFailedWake = nil
     }
 
     func stop() {
         gate.unpark()
         engine.stop()
+        lastFailedWake = nil
+        clearWakeMark()
     }
 
     /// Main thread, on a timer while Downstroke is on.
     func tick(now: Double) {
-        guard engine.isRunning, gate.shouldPause(now: now, activeVoices: mixer.activeVoices), gate.park(now: now) else { return }
+        guard engine.isRunning else { return }
+        if mixer.hasWakeMark {
+            // Two renders after seeing it running, the waking key has been popped.
+            let renders = engine.stats.renders.load(ordering: .relaxed)
+            if let marked = markRenders, renders - marked >= 2 { clearWakeMark() } else if markRenders == nil { markRenders = renders }
+        }
+        guard gate.shouldPause(now: now, activeVoices: mixer.activeVoices), gate.park(now: now) else { return }
         engine.pause()
+    }
+
+    private func clearWakeMark() {
+        mixer.clearWakeMark()
+        markRenders = nil
     }
 
     private func wake(since: Double) {
         // Stopped or restarted since the activity claimed the wake.
         guard engine.isPaused else { return }
-        wakes += 1
         let t0 = MonotonicClock.now()
+        // At most one start attempt a second after a failure.
+        if let failed = lastFailedWake, t0 - failed < 1 { return giveUp() }
+        wakes += 1
         do {
             try engine.start()
+            lastFailedWake = nil
             lastWake = (t0 - since, MonotonicClock.now() - t0)
             onWake?(nil)
         } catch {
             engine.pause()
-            gate.repark()
+            lastFailedWake = MonotonicClock.now()
+            giveUp()
             onWake?(error)
         }
+    }
+
+    // Unplayed keys go back under the stale guard, so a later start never replays them.
+    private func giveUp() {
+        clearWakeMark()
+        gate.repark()
     }
 }

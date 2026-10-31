@@ -1,7 +1,7 @@
 import Synchronization
 
-/// When the audio engine may pause for idleness, and exactly one wake per pause; any thread unless noted.
-// Activity stores its stamp then reads `parked`; parking stores `parked` then reads the stamp, so one side always sees the other.
+/// Idle-pause decisions and one wake per pause; any thread unless noted.
+// Seq-cst stamp and flag order: a racing key and park always see each other.
 public final class EngineIdleGate: Sendable {
     private let lastActivityBits: Atomic<UInt64>
     private let timeoutBits: Atomic<UInt64>

@@ -164,6 +164,28 @@ private func trigger(
     #expect(latencies.allSatisfy { $0 <= 0.25 })
 }
 
+@Test func wakingKeyAndLaterSurviveTheStaleGuard() {
+    let clip = makeClip([Float](repeating: 0.1, count: 4800))
+    defer { freeClip(clip) }
+    let queue = TriggerQueue(), mixer = VoiceMixer(queue: queue), out = Output()
+    // A slow restart: the waking key is 1 s old by the first render.
+    mixer.setWakeMark(10.0)
+    #expect(queue.push(trigger(clip, time: 9.5)))
+    #expect(queue.push(trigger(clip, time: 10.0)))
+    #expect(queue.push(trigger(clip, time: 10.2)))
+    render(mixer, out, at: 11.0)
+    #expect(mixer.activeVoices == 2)
+    #expect(mixer.staleTriggers == 1)
+    var latencies: [Double] = []
+    mixer.drainLatencies(into: &latencies)
+    #expect(latencies.count == 2)
+
+    mixer.clearWakeMark()
+    #expect(queue.push(trigger(clip, time: 10.5)))
+    render(mixer, out, at: 11.0)
+    #expect(mixer.staleTriggers == 2)
+}
+
 private func makeBank() throws -> (SampleBank, URL) {
     let dir = try makeTempDirectory()
     let pack = dir.appendingPathComponent("r.switchcraft")

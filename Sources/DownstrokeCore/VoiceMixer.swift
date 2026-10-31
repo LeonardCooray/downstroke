@@ -71,6 +71,8 @@ public final class VoiceMixer: @unchecked Sendable {
     private let staleCount = Atomic<Int>(0)
     private let targetGain = Atomic<UInt32>(Float(1).bitPattern)
     private let sampleRateBits = Atomic<UInt64>(Double(48000).bitPattern)
+    // Triggers at or after this event time skip the stale guard; infinity means none do.
+    private let wakeMarkBits = Atomic<UInt64>(Double.infinity.bitPattern)
     private let latencies = DoubleRing(capacity: 1024)
     private var retired: [(bank: SampleBank, deadline: Double, deadlineCycle: Int?)] = []
 
@@ -96,8 +98,19 @@ public final class VoiceMixer: @unchecked Sendable {
     /// Voices sounding at the end of the last render.
     public var activeVoices: Int { activeCount.load(ordering: .relaxed) }
 
-    /// Triggers dropped for being more than 0.25 s old when popped.
+    /// Triggers dropped for being more than 0.25 s old when popped (and older than any wake mark).
     public var staleTriggers: Int { staleCount.load(ordering: .relaxed) }
+
+    /// Any thread. Triggers from `eventTime` on play however late the engine restarts.
+    public func setWakeMark(_ eventTime: Double) {
+        guard eventTime.isFinite else { return }
+        wakeMarkBits.store(eventTime.bitPattern, ordering: .relaxed)
+    }
+
+    /// Main thread, once the restarted engine has rendered.
+    public func clearWakeMark() { wakeMarkBits.store(Double.infinity.bitPattern, ordering: .relaxed) }
+
+    public var hasWakeMark: Bool { wakeMarkBits.load(ordering: .relaxed) != Double.infinity.bitPattern }
 
     /// Clamped to 0...4; non-finite values are ignored.
     public func setMasterGain(_ g: Float) {
@@ -126,8 +139,9 @@ public final class VoiceMixer: @unchecked Sendable {
             state.pointee.rampStep = (target - state.pointee.gain) / Float(state.pointee.rampLength)
         }
 
+        let wakeMark = Double(bitPattern: wakeMarkBits.load(ordering: .relaxed))
         while let trigger = queue.pop() {
-            if hostTime - trigger.eventTime > staleAfter {
+            if hostTime - trigger.eventTime > staleAfter && trigger.eventTime < wakeMark {
                 staleCount.wrappingAdd(1, ordering: .relaxed)
                 continue
             }

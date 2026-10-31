@@ -122,6 +122,8 @@ final class AppController: ObservableObject {
     private var bankRate = 0.0
     private var bankGeneration = 0
     private var stats = LatencyStats()
+    /// The most recent press's latency kept for the readout.
+    private(set) var lastLatency: Double?
     private var drained: [Double] = []
     private var statusTimer: Timer?
     private var wakeObserver: (any NSObjectProtocol)?
@@ -349,6 +351,7 @@ final class AppController: ObservableObject {
         mixer.drainLatencies(into: &drained)
         guard keep, !drained.isEmpty else { return drained.count }
         for value in drained { stats.add(value) }
+        lastLatency = drained.last
         latencyP50 = stats.p50
         latencyP99 = stats.p99
         latencyCount = stats.count

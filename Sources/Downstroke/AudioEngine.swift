@@ -24,7 +24,7 @@ final class RenderStats: Sendable {
 final class AudioEngine {
     static let requestedBufferFrames: UInt32 = 128
 
-    /// How `pause()` idles the engine; both resume with `start()` and measured the same (see the bench).
+    /// How `pause()` idles the engine; the bench measures both.
     enum IdleMode {
         case pause, stop
 
@@ -62,6 +62,13 @@ final class AudioEngine {
         let resuming = want == .paused
         want = .running
         guard !engine.isRunning else { return }
+        #if DEBUG
+        if let simulatedStartFailure {
+            lastError = simulatedStartFailure
+            throw simulatedStartFailure
+        }
+        if simulatedStartDelay > 0 { Thread.sleep(forTimeInterval: simulatedStartDelay) }
+        #endif
         // A device change can go unannounced while paused; resume on a matching engine.
         if resuming, outputRateChanged {
             reconfigure()
@@ -180,5 +187,10 @@ final class AudioEngine {
     }
 
     var engineIdentity: ObjectIdentifier { ObjectIdentifier(engine) }
+
+    /// Makes every start() throw this until cleared.
+    var simulatedStartFailure: (any Error)?
+    /// Seconds each start() blocks first, like a slow device.
+    var simulatedStartDelay = 0.0
     #endif
 }

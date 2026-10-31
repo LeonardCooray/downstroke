@@ -255,6 +255,16 @@ enum DebugSelfTest {
         check(controller.latencyCount == countRetry + 1 && controller.mixer.staleTriggers > staleBeforeFail,
               "the two keys that hit the failed engine are dropped as stale, not replayed (\(controller.mixer.staleTriggers - staleBeforeFail) triggers dropped)")
 
+        // Wanted running but not rendering: a leftover wake mark must still clear.
+        engine.simulatedStartFailure = NSError(domain: "DownstrokeSelfTest", code: 2)
+        engine.stop()
+        try? idler.start()
+        engine.simulatedStartFailure = nil
+        controller.mixer.setWakeMark(MonotonicClock.now())
+        try? await Task.sleep(for: .milliseconds(400))
+        check(idler.status == .off && !controller.mixer.hasWakeMark, "a wake mark clears when the engine stops without idling")
+        try? idler.start()
+
         guard await waitPaused() != nil else { return check(false, "engine pauses before the disable check") }
         controller.setEnabled(false)
         check(idler.status == .off && engineRow() == "Off", "turning Downstroke off stops a paused engine (row: Off)")

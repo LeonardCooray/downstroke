@@ -104,13 +104,13 @@ public final class VoiceMixer: @unchecked Sendable {
     /// Any thread. Triggers from `eventTime` on play however late the engine restarts.
     public func setWakeMark(_ eventTime: Double) {
         guard eventTime.isFinite else { return }
-        wakeMarkBits.store(eventTime.bitPattern, ordering: .relaxed)
+        wakeMarkBits.store(eventTime.bitPattern, ordering: .releasing)
     }
 
     /// Main thread, once the restarted engine has rendered.
-    public func clearWakeMark() { wakeMarkBits.store(Double.infinity.bitPattern, ordering: .relaxed) }
+    public func clearWakeMark() { wakeMarkBits.store(Double.infinity.bitPattern, ordering: .releasing) }
 
-    public var hasWakeMark: Bool { wakeMarkBits.load(ordering: .relaxed) != Double.infinity.bitPattern }
+    public var hasWakeMark: Bool { wakeMarkBits.load(ordering: .acquiring) != Double.infinity.bitPattern }
 
     /// Clamped to 0...4; non-finite values are ignored.
     public func setMasterGain(_ g: Float) {
@@ -139,7 +139,7 @@ public final class VoiceMixer: @unchecked Sendable {
             state.pointee.rampStep = (target - state.pointee.gain) / Float(state.pointee.rampLength)
         }
 
-        let wakeMark = Double(bitPattern: wakeMarkBits.load(ordering: .relaxed))
+        let wakeMark = Double(bitPattern: wakeMarkBits.load(ordering: .acquiring))
         while let trigger = queue.pop() {
             if hostTime - trigger.eventTime > staleAfter && trigger.eventTime < wakeMark {
                 staleCount.wrappingAdd(1, ordering: .relaxed)

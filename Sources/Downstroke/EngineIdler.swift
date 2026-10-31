@@ -68,7 +68,11 @@ final class EngineIdler {
 
     /// Main thread, on a timer while Downstroke is on.
     func tick(now: Double) {
-        guard engine.isRunning else { return }
+        guard engine.isRunning else {
+            // Stopped without idling (a failed start or rebuild): no wake is in flight to keep the mark for.
+            if !engine.isPaused, mixer.hasWakeMark { clearWakeMark() }
+            return
+        }
         if mixer.hasWakeMark {
             // Two renders after seeing it running, the waking key has been popped.
             let renders = engine.stats.renders.load(ordering: .relaxed)

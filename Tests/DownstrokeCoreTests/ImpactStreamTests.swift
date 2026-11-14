@@ -39,13 +39,26 @@ private struct StreamRig {
 private let normal: [Slot] = [.press(.medium), .press(.hard)]
 private let threshold = SlamMapper(sensitivity: 0.5).threshold
 
+/// Peak a bare filter reads in a press window `pressAfter` s after priming `offset` g off baseline.
+private func unsuppressedPeak(offset: Float, pressAfter: Double) -> Float {
+    var filter = ImpactFilter()
+    _ = filter.process(AccelSample(time: 0, x: 0, y: 0, z: 1 + offset))
+    var peak: Float = 0
+    for i in 1..<Int(rate) {
+        let t = Double(i) / rate
+        let out = filter.process(AccelSample(time: t, x: 0, y: 0, z: 1))
+        if t >= pressAfter - 0.015 && t <= pressAfter + 0.008 { peak = max(peak, out) }
+    }
+    return peak
+}
+
 @Test func misprimeAfterAGapPlaysNormal() {
     var rig = StreamRig()
     rig.feed(from: 0, to: 1)
     // The first sample after a 0.3 s gap is caught 40 mg off its baseline, mid-transient.
     rig.feed(from: 1.3, to: 2, firstOffset: 0.04)
-    let peak = ImpactAnalyzer.peak(in: rig.ring, keyTime: 1.32) ?? 0
-    #expect(peak > threshold, "the mis-prime alone reads as a slam (\(peak) g)")
+    let peak = unsuppressedPeak(offset: 0.04, pressAfter: 0.02)
+    #expect(peak > threshold, "unsuppressed, the mis-prime alone reads as a slam (\(peak) g)")
     #expect(rig.press(at: 1.32) == normal)
     #expect(rig.pipeline.slamCount == 0)
 }
@@ -55,8 +68,8 @@ private let threshold = SlamMapper(sensitivity: 0.5).threshold
     rig.feed(from: 0, to: 1)
     // A large mis-prime: the filter's undershoot lobe is still ~15% of it 100 ms later.
     rig.feed(from: 1.3, to: 2, firstOffset: 0.15)
-    let peak = ImpactAnalyzer.peak(in: rig.ring, keyTime: 1.40) ?? 0
-    #expect(peak > threshold, "the undershoot reads as a slam (\(peak) g)")
+    let peak = unsuppressedPeak(offset: 0.15, pressAfter: 0.1)
+    #expect(peak > threshold, "unsuppressed, the undershoot reads as a slam (\(peak) g)")
     #expect(rig.press(at: 1.40) == normal)
 }
 
@@ -99,14 +112,24 @@ private let threshold = SlamMapper(sensitivity: 0.5).threshold
     #expect(rig.press(at: 1.02) == normal)
 }
 
-@Test func settleWindowCoversThePressWindowStart() {
-    let ring = SampleRing()
-    ring.markReprimed(at: 1.8)
-    #expect(!ImpactAnalyzer.isSettled(in: ring, keyTime: 2.0145))
-    #expect(ImpactAnalyzer.isSettled(in: ring, keyTime: 2.0155))
-    #expect(!ImpactAnalyzer.isSettled(in: ring, keyTime: 1.7925))
-    #expect(ImpactAnalyzer.isSettled(in: ring, keyTime: 1.7915))
-    #expect(ImpactAnalyzer.isSettled(in: SampleRing(), keyTime: 0))
+@Test func lateKeyAfterASecondReprimeStillPlaysNormal() {
+    var rig = StreamRig()
+    rig.feed(from: 0, to: 0.8)
+    rig.feed(from: 1.0, to: 1.1, firstOffset: 0.15)
+    rig.feed(from: 1.2, to: 1.3)
+    let raw = unsuppressedPeak(offset: 0.15, pressAfter: 0.05)
+    #expect(raw > threshold, "unsuppressed, the mis-prime reads as a slam in the press window (\(raw) g)")
+    // A key from inside the first re-prime's settle time, delivered after the second re-prime.
+    rig.pipeline.keyEvent(KeyEvent(time: 1.05, keyCode: 0, isRelease: false, isModifier: false), now: 1.21)
+    #expect(drain(rig.queue).map { slot(of: $0, in: sharedBank) } == normal)
+}
+
+@Test func impactsReadZeroUntilTheFilterSettles() {
+    var rig = StreamRig()
+    rig.feed(from: 1, to: 2, firstOffset: 0.04)
+    let settling = rig.ring.impacts(from: 1, to: 1 + ImpactStream.settleTime - 0.002)
+    #expect(!settling.isEmpty && settling.allSatisfy { $0 == 0 })
+    #expect(rig.ring.impacts(from: 1 + ImpactStream.settleTime + 0.002, to: 2).contains { $0 > 0 })
 }
 
 @Test func settleTimeCoversTheFilterStepResponse() {

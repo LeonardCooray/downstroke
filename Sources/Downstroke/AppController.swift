@@ -137,6 +137,7 @@ final class AppController: ObservableObject {
     private var tapRetry: RetryBackoff
     private var sensorRetry: RetryBackoff
     private var lastPermission: Bool?
+    private var sensorMissingTries = 0
 
     /// `engineIdleTimeout`: seconds without a key, audition or sound before the engine pauses.
     /// `tapRetry` and `sensorRetry`: backoff after a start fails other than for permission.
@@ -180,7 +181,6 @@ final class AppController: ObservableObject {
             MainActor.assumeIsolated { self?.didWake() }
         }
         contextChanged()
-        lastPermission = hasListenPermission
         started = true
         apply()
         statusTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
@@ -317,12 +317,17 @@ final class AppController: ObservableObject {
         }
     }
 
-    /// `permission`: an Input Monitoring check the caller already made.
-    private func startTap(permission: Bool? = nil) {
+    private func startTap() {
         guard !tap.isRunning else { return }
-        guard permission ?? hasListenPermission else {
-            permissionMissing = true
-            listening = false
+        let permission = hasListenPermission
+        // A grant or revoke is a fresh start for the backoff.
+        if permission != lastPermission {
+            lastPermission = permission
+            tapRetry.reset()
+        }
+        guard permission else {
+            if !permissionMissing { permissionMissing = true }
+            if listening { listening = false }
             return
         }
         guard tapRetry.isDue(now: MonotonicClock.now()) else { return }
@@ -349,7 +354,12 @@ final class AppController: ObservableObject {
             sensorStatus = .unavailable("\(error)")
             sensorRetry.failed(now: MonotonicClock.now())
             // A few quick tries cover a sensor still enumerating after wake; a Mac with none won't grow one.
-            if case MotionSensorError.notFound = error, sensorRetry.failures >= 4 { sensorRetry.stop() }
+            if sensorRetry.failures == 1 { sensorMissingTries = 0 }
+            switch error {
+            case MotionSensorError.notFound, MotionSensorError.noDevice: sensorMissingTries += 1
+            default: sensorMissingTries = 0
+            }
+            if sensorMissingTries >= 4 { sensorRetry.stop() }
         }
     }
 
@@ -416,14 +426,7 @@ final class AppController: ObservableObject {
             sensorAvailable = streaming
             updatePipeline()
         }
-        if settings.enabled && !tap.isRunning {
-            let permission = hasListenPermission
-            if permission != lastPermission {
-                lastPermission = permission
-                tapRetry.reset()
-            }
-            startTap(permission: permission)
-        }
+        if settings.enabled && !tap.isRunning { startTap() }
         if settings.enabled && settings.hitStrengthEnabled, case .unavailable = sensorStatus { startSensor() }
         if settings.enabled {
             idler.tick(now: MonotonicClock.now())

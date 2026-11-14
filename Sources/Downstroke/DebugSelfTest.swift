@@ -93,13 +93,15 @@ enum DebugSelfTest {
             // Catches a wrong timestamp unit: samples must sit on the MonotonicClock timebase.
             let lag = MonotonicClock.now() - (ring.latestTime ?? 0)
             check(lag >= 0 && lag < 0.05, "latest sample is on the MonotonicClock timebase, round \(round)")
-            check(ring.lastReprime > startedAt - 0.05, "the first sample marks a filter re-prime, round \(round)")
+            let settling = ring.impacts(from: startedAt + 0.02, to: startedAt + 0.15)
+            check(!settling.isEmpty && settling.allSatisfy { $0 == 0 }, "impacts read zero while the filter settles after start, round \(round)")
+            check(ring.impacts(from: startedAt + 0.35, to: MonotonicClock.now()).contains { $0 > 0 }, "and real impacts once it has settled, round \(round)")
             let rewakeAt = MonotonicClock.now()
             sensor.rewake()
             try? await Task.sleep(for: .milliseconds(200))
             check(sensor.isStreaming, "sensor streams after rewake, round \(round)")
-            // A report stamped just before the rewake may be the one that re-primes.
-            check(ring.lastReprime > rewakeAt - 0.05, "rewake re-primes the filter, round \(round)")
+            let resettling = ring.impacts(from: rewakeAt + 0.01, to: rewakeAt + 0.15)
+            check(!resettling.isEmpty && resettling.allSatisfy { $0 == 0 }, "rewake re-primes and impacts read zero while it settles, round \(round)")
             sensor.stop()
             check(!sensor.isRunning && !sensor.isStreaming, "sensor stops, round \(round)")
         }
@@ -205,6 +207,14 @@ enum DebugSelfTest {
         let failed = unavailable()
         controller.update { $0.hitStrengthEnabled = false }
         check(failed && controller.sensorStatus == .off, "turning the accent off clears a sensor error to Off (\(controller.sensorStatus))")
+
+        controller.update { $0.hitStrengthEnabled = true }
+        _ = await waitUntil(2) { controller.sensorRetryFailures >= 3 }
+        controller.simulatedSensorError = .noDevice
+        let beforeMissing = controller.sensorStartAttempts.count
+        try? await Task.sleep(for: .seconds(11))
+        check(controller.sensorStartAttempts.count == beforeMissing + 4,
+              "no device after opening gets the same few tries, counted apart from earlier open failures (\(controller.sensorStartAttempts.count - beforeMissing) attempts)")
     }
 
     // Triggers queued while the engine won't start stay out of the latency readout.

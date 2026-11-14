@@ -194,7 +194,7 @@ private struct PermissionBanner: View {
 }
 
 /// 16 rising bars lit by the last hit; the right half, past the threshold tick, means a slam.
-private struct HitMeter: View {
+struct HitMeter: View {
     static let height: CGFloat = 22
     @ObservedObject var meter: MeterModel
 

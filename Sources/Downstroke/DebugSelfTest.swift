@@ -597,6 +597,7 @@ enum DebugSelfTest {
         check(meter.lit == 0, "dark after 300 ms (\(meter.lit))")
         meter.step(press: (2, 0.5), now: 11)
         check(meter.lit == 8, "a new press re-arms the meter (\(meter.lit))")
+        checkMeterRendering()
 
         let name = { (id: String) in id == "us.zoom.xos" ? "zoom.us" : id }
         func status(enabled: Bool = true, permission: Bool = false, front: String? = nil, mic: Bool = false) -> String {
@@ -792,6 +793,8 @@ enum DebugSelfTest {
         check(snap.sampleRate > 0 && snap.ioFrames > 0 && snap.device != "None",
               "diagnostics: \(snap.device), \(snap.sampleRateText), \(snap.ioText), sensor \(snap.sensor)")
         check(snap.engine == "Running" && snap.report.contains("Audio engine: Running"), "diagnostics engine row: \(snap.engine)")
+        check(snap.slams == 0 && snap.report.contains("Slams since launch: 0"), "diagnostics slam row starts at 0 (\(snap.slams))")
+        checkSlamRow(controller, settingsWindow.diagnostics)
         settingsWindow.show(.sound)
         try? await Task.sleep(for: .milliseconds(300))
         let soundTicks = settingsWindow.diagnostics.ticks
@@ -812,6 +815,60 @@ enum DebugSelfTest {
         try? await Task.sleep(for: .milliseconds(200))
         controller.setEnabled(false)
         defaults.removePersistentDomain(forName: AudioRig.isolatedSuite)
+    }
+
+    /// Reads pixels of the rendered meter: orange only past the centre, grey below it, and the tick in the middle gap.
+    private static func checkMeterRendering() {
+        let segments = MeterModel.segments, bar: CGFloat = 10, gap: CGFloat = 3, scale: CGFloat = 2
+        let width = CGFloat(segments) * bar + CGFloat(segments - 1) * gap
+        for (scheme, name) in [(ColorScheme.light, "light"), (.dark, "dark")] {
+            for lit in [8, 11, 16] {
+                let meter = MeterModel()
+                meter.show(lit)
+                let renderer = ImageRenderer(content: HitMeter(meter: meter).frame(width: width).environment(\.colorScheme, scheme))
+                renderer.scale = scale
+                guard let image = renderer.cgImage else { return check(false, "meter renders (\(name))") }
+                let rep = NSBitmapImageRep(cgImage: image)
+                func pixel(_ x: CGFloat, up y: CGFloat) -> NSColor? {
+                    rep.colorAt(x: Int(x * scale), y: rep.pixelsHigh - 1 - Int(y * scale))?.usingColorSpace(.sRGB)
+                }
+                let bars = (0..<segments).map { pixel(CGFloat($0) * (bar + gap) + bar / 2, up: 3) }
+                let orange = bars.indices.filter {
+                    guard let c = bars[$0] else { return false }
+                    return c.alphaComponent > 0.9 && c.redComponent > 0.8 && c.blueComponent < 0.35 && c.redComponent - c.greenComponent > 0.2
+                }
+                check(orange == Array(segments / 2..<lit), "meter \(lit) lit (\(name)): orange bars \(orange)")
+                let alpha = bars.map { $0?.alphaComponent ?? 0 }
+                if lit < segments {
+                    check(alpha[..<(segments / 2)].min()! > alpha[lit...].max()! + 0.1,
+                          String(format: "meter \(lit) lit (\(name)): grey below the tick stands out from unlit bars (%.2f vs %.2f)",
+                                 alpha[..<(segments / 2)].min()!, alpha[lit...].max()!))
+                }
+                let tick = pixel(width / 2, up: 11)?.alphaComponent ?? 0
+                let otherGap = pixel(4 * (bar + gap) - gap / 2, up: 11)?.alphaComponent ?? 0
+                check(tick > 0.2 && otherGap < 0.05,
+                      String(format: "meter \(lit) lit (\(name)): threshold tick in the centre gap (%.2f, other gaps %.2f)", tick, otherGap))
+            }
+        }
+    }
+
+    /// One synthetic slam through the controller's pipeline and ring, which have no other writer while the accent is off.
+    private static func checkSlamRow(_ controller: AppController, _ diagnostics: DiagnosticsModel) {
+        guard let board = controller.boards.first(where: { $0.id == controller.settings.boardID }),
+              let bank = try? SampleBank(board: board, sampleRate: controller.engine.sampleRate > 0 ? controller.engine.sampleRate : 48_000)
+        else { return check(false, "bank for the synthetic slam") }
+        var accent = controller.settings
+        accent.hitStrengthEnabled = true
+        controller.pipeline.update(settings: accent, bank: bank, sensorAvailable: true)
+        let t = MonotonicClock.now()
+        controller.ring.append(time: t, impact: 0.05)
+        controller.ring.append(time: t + 0.009, impact: 0.001)
+        let played = controller.pipeline.keyEvent(KeyEvent(time: t, keyCode: 0, isRelease: false, isModifier: false), now: t + 0.01)
+        controller.pipeline.update(settings: controller.settings, bank: bank, sensorAvailable: controller.sensorAvailable)
+        diagnostics.sample()
+        let snap = diagnostics.snapshot
+        check(played && snap.slams == 1 && snap.report.contains("Slams since launch: 1"),
+              "diagnostics slam row counts a slam (played \(played), row \(snap.slams))")
     }
 
     /// Captures each Settings tab in light and dark to build/settings-<tab>-<appearance>.png.

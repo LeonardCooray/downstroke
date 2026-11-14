@@ -40,7 +40,7 @@ enum DebugSelfTest {
         guard let i = args.firstIndex(of: "--self-test"), i + 1 < args.count else { return }
         Task { @MainActor in
             switch args[i + 1] {
-            case "tap-reenable": await tapRetry(); tapReenable()
+            case "tap-reenable": tapReenable(); await tapRetry()
             case "sensor-restart": await sensorRestart(); await sensorRetry()
             case "audio": await audio(); await failedStartLatency()
             case "audio-reconfigure": await audioReconfigure()
@@ -82,6 +82,7 @@ enum DebugSelfTest {
         let ring = SampleRing()
         let sensor = MotionSensor(ring: ring)
         for round in 1...2 {
+            let startedAt = MonotonicClock.now()
             do {
                 try sensor.start()
             } catch {
@@ -92,7 +93,7 @@ enum DebugSelfTest {
             // Catches a wrong timestamp unit: samples must sit on the MonotonicClock timebase.
             let lag = MonotonicClock.now() - (ring.latestTime ?? 0)
             check(lag >= 0 && lag < 0.05, "latest sample is on the MonotonicClock timebase, round \(round)")
-            check(ring.lastReprime > 0, "the first sample marks a filter re-prime, round \(round)")
+            check(ring.lastReprime > startedAt - 0.05, "the first sample marks a filter re-prime, round \(round)")
             let rewakeAt = MonotonicClock.now()
             sensor.rewake()
             try? await Task.sleep(for: .milliseconds(200))
@@ -189,14 +190,21 @@ enum DebugSelfTest {
         controller.simulatedSensorError = .notFound
         let before = controller.sensorStartAttempts.count
         controller.update { $0.hitStrengthEnabled = true }
-        try? await Task.sleep(for: .seconds(1))
+        try? await Task.sleep(for: .seconds(2.5))
         controller.update { $0.volume = 0.01 }
-        try? await Task.sleep(for: .seconds(1.5))
-        check(unavailable() && controller.sensorStartAttempts.count == before + 1,
-              "no accelerometer: tried once, then no retries or settings-change attempts (\(controller.sensorStartAttempts.count - before) attempts)")
+        try? await Task.sleep(for: .seconds(2))
+        check(unavailable() && controller.sensorStartAttempts.count == before + 4,
+              "no accelerometer: a few quick tries, then none, even on settings changes (\(controller.sensorStartAttempts.count - before) attempts)")
         controller.simulatedSensorError = nil
         controller.simulateWake()
-        check(controller.sensorStartAttempts.count == before + 2, "waking from sleep tries the sensor again")
+        check(controller.sensorStartAttempts.count == before + 5, "waking from sleep tries the sensor again")
+
+        controller.update { $0.hitStrengthEnabled = false }
+        controller.simulatedSensorError = .openFailed(kIOReturnExclusiveAccess)
+        controller.update { $0.hitStrengthEnabled = true }
+        let failed = unavailable()
+        controller.update { $0.hitStrengthEnabled = false }
+        check(failed && controller.sensorStatus == .off, "turning the accent off clears a sensor error to Off (\(controller.sensorStatus))")
     }
 
     // Triggers queued while the engine won't start stay out of the latency readout.

@@ -78,18 +78,16 @@ public struct ImpactStream: Sendable {
 
     private var filter = ImpactFilter()
     private var lastTime = -Double.infinity
-    private var resetRequested = false
 
     public init() {}
 
     /// Re-primes on the next sample.
-    public mutating func reset() { resetRequested = true }
+    public mutating func reset() { lastTime = -.infinity }
 
     /// Single writer, like `SampleRing.append`.
     public mutating func append(_ s: AccelSample, to ring: SampleRing) {
-        if resetRequested || s.time - lastTime > Self.restartGap {
+        if s.time - lastTime > Self.restartGap {
             filter = ImpactFilter()
-            resetRequested = false
             ring.markReprimed(at: s.time)
         }
         lastTime = s.time

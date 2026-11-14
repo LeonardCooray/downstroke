@@ -317,9 +317,10 @@ final class AppController: ObservableObject {
         }
     }
 
-    private func startTap() {
+    /// `permission`: an Input Monitoring check the caller already made.
+    private func startTap(permission: Bool? = nil) {
         guard !tap.isRunning else { return }
-        guard hasListenPermission else {
+        guard permission ?? hasListenPermission else {
             permissionMissing = true
             listening = false
             return
@@ -346,14 +347,14 @@ final class AppController: ObservableObject {
             sensorRetry.reset()
         } catch {
             sensorStatus = .unavailable("\(error)")
-            // A Mac with no accelerometer won't grow one; a failed open can clear up.
-            if case MotionSensorError.notFound = error { sensorRetry.stop() } else { sensorRetry.failed(now: MonotonicClock.now()) }
+            sensorRetry.failed(now: MonotonicClock.now())
+            // A few quick tries cover a sensor still enumerating after wake; a Mac with none won't grow one.
+            if case MotionSensorError.notFound = error, sensorRetry.failures >= 4 { sensorRetry.stop() }
         }
     }
 
     private func stopSensor() {
         sensor.stop()
-        if case .unavailable = sensorStatus { return }
         sensorStatus = .off
     }
 
@@ -421,7 +422,7 @@ final class AppController: ObservableObject {
                 lastPermission = permission
                 tapRetry.reset()
             }
-            if permission { startTap() }
+            startTap(permission: permission)
         }
         if settings.enabled && settings.hitStrengthEnabled, case .unavailable = sensorStatus { startSensor() }
         if settings.enabled {

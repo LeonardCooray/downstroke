@@ -231,7 +231,7 @@ enum BenchMode {
         let on = await typing(rig, settings: settings, bank: bank, sensor: sensor)
         sensor.stop()
 
-        // First key after an idle pause, hit strength off so the number is the restart alone.
+        // First key after an idle pause, slam accent off so the number is the restart alone.
         settings.hitStrengthEnabled = false
         rig.pipeline.update(settings: settings, bank: bank, sensorAvailable: false)
         let wakeChosen = await firstKeys(rig, mode: chosenMode)
@@ -246,13 +246,13 @@ enum BenchMode {
         let minLead = rig.engine.stats.minLead
         print(String(format: "render-cycle start = output host time minus the smallest render lead seen (%.2f ms)", minLead * 1000))
         let offRender = off.latencies.map { $0 - minLead }, onRender = on.latencies.map { $0 - minLead }
-        latencyLine("latency p99, key event to render-cycle start, hit strength off", offRender, budget: 0.003 + buffer)
-        latencyLine("latency p99, key event to render-cycle start, hit strength on", onRender, budget: 0.008 + 0.003 + buffer)
-        info("key event to output time (what you hear, as the live readout), hit strength off", off.latencies)
-        info("key event to output time (what you hear, as the live readout), hit strength on", on.latencies)
+        latencyLine("latency p99, key event to render-cycle start, slam accent off", offRender, budget: 0.003 + buffer)
+        latencyLine("latency p99, key event to render-cycle start, slam accent on", onRender, budget: 0.008 + 0.003 + buffer)
+        info("key event to output time (what you hear, as the live readout), slam accent off", off.latencies)
+        info("key event to output time (what you hear, as the live readout), slam accent on", on.latencies)
         print("info stale triggers dropped: \(rig.mixer.staleTriggers) (latency samples are key presses only, one per press)")
         let first = "first key after an idle pause"
-        latencyLine("\(first), key event to render-cycle start (hit strength off, idled with \(chosenMode.name))",
+        latencyLine("\(first), key event to render-cycle start (slam accent off, idled with \(chosenMode.name))",
                     wakeChosen.latencies.map { $0 - minLead }, budget: 0.050, minCount: 10)
         info("\(first), key event to output time, \(chosenMode.name)", wakeChosen.latencies)
         info("\(first), engine start() call, \(chosenMode.name)", wakeChosen.starts)
@@ -263,11 +263,11 @@ enum BenchMode {
         for (wakes, mode) in [(wakeChosen, chosenMode), (wakeOther, otherMode)] where wakes.pauseFailed {
             check(false, "engine did not pause after \(idleTimeout) s idle during the first-key samples (\(mode.name))")
         }
-        cpuLine("idle CPU, engine running (hit strength off)", idle, budget: 1.0)
+        cpuLine("idle CPU, engine running (slam accent off)", idle, budget: 1.0)
         print(String(format: "info idle CPU, engine + synthetic 800 Hz sensor: %.2f%% of a core (not checked)", syntheticIdle))
         if let realRunning, let realPaused, let realOther, realRate >= 700 {
-            // Ruling: hit strength on has its own idle budget, set from the measured HID floor.
-            cpuLine(String(format: "idle CPU, engine + real sensor (%.0f Hz), engine idle-paused (%@) after %.0f s, hit-strength-on idle budget",
+            // Ruling: slam accent on has its own idle budget, set from the measured HID floor.
+            cpuLine(String(format: "idle CPU, engine + real sensor (%.0f Hz), engine idle-paused (%@) after %.0f s, slam-accent-on idle budget",
                            realRate, chosenMode.name, idleTimeout), realPaused, budget: 1.5)
             print(String(format: "info idle CPU, engine running + real sensor: %.2f%% of a core (not checked; before the idle pause)", realRunning))
             print(String(format: "info idle CPU, real sensor, engine idled with %@ instead: %.2f%% of a core (not checked)", otherMode.name, realOther))
@@ -276,11 +276,11 @@ enum BenchMode {
                 check(false, "idle CPU, engine + real sensor, engine idle-paused: \(pauseError)")
             } else {
                 let reason = realError ?? String(format: "sensor delivered %.0f Hz, below 700 Hz", realRate)
-                print("SKIP idle CPU, engine + real sensor: \(reason); the hit-strength-on idle budget (1.5%) was not checked")
+                print("SKIP idle CPU, engine + real sensor: \(reason); the slam-accent-on idle budget (1.5%) was not checked")
             }
         }
-        cpuLine("typing CPU, hit strength off", off.cpu, budget: 3.0)
-        cpuLine("typing CPU, hit strength on (synthetic sensor)", on.cpu, budget: 3.0)
+        cpuLine("typing CPU, slam accent off", off.cpu, budget: 3.0)
+        cpuLine("typing CPU, slam accent on (synthetic sensor)", on.cpu, budget: 3.0)
         let mb = Double(footprint) / 1_048_576
         check(footprint > 0 && mb <= 100 && !rig.boards.isEmpty && banks.count == rig.boards.count,
               String(format: "phys_footprint %.1f MB with %d of %d banks loaded (budget 100 MB, all banks)", mb, banks.count, rig.boards.count))

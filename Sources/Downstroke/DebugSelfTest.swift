@@ -449,7 +449,7 @@ enum DebugSelfTest {
                       String(format: "motion sensor streams while the engine is paused (paused after %.2f s)", t))
             }
         } else {
-            check(false, "engine pauses with hit strength on")
+            check(false, "engine pauses with the slam accent on")
         }
         controller.setEnabled(false)
         defaults.removePersistentDomain(forName: AudioRig.isolatedSuite)
@@ -639,11 +639,11 @@ enum DebugSelfTest {
         }
 
         controller.binding(\.hitStrengthEnabled).wrappedValue = true
-        check(everywhere(\.hitStrengthEnabled, true), "hit strength on: saved and in the pipeline")
+        check(everywhere(\.hitStrengthEnabled, true), "slam accent on: saved and in the pipeline")
         controller.binding(\.hitStrengthEnabled).wrappedValue = false
-        check(everywhere(\.hitStrengthEnabled, false), "hit strength off: saved and in the pipeline")
+        check(everywhere(\.hitStrengthEnabled, false), "slam accent off: saved and in the pipeline")
         controller.sliderBinding(\.sensitivity).wrappedValue = 0.8
-        check(everywhere(\.sensitivity, 0.8), "sensitivity 0.8: saved and in the pipeline")
+        check(everywhere(\.sensitivity, 0.8), "slam threshold 0.8: saved and in the pipeline")
         controller.binding(\.keyUpSounds).wrappedValue = false
         check(everywhere(\.keyUpSounds, false), "key-up sounds off: saved and in the pipeline")
         controller.sliderBinding(\.stereoWidth).wrappedValue = 0.2

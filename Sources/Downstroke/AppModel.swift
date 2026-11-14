@@ -101,7 +101,7 @@ struct PanelState: Equatable {
     }
 }
 
-/// Lit segments of the hit-strength meter; its own object so only the meter redraws at display rate.
+/// Lit segments of the slam meter; its own object so only the meter redraws at display rate.
 @MainActor
 final class MeterModel: ObservableObject {
     static let segments = 16

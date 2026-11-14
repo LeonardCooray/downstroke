@@ -69,6 +69,15 @@ private let threshold = SlamMapper(sensitivity: 0.5).threshold
     #expect(rig.pipeline.slamCount == 1)
 }
 
+@Test func reprimeAfterThePressWindowKeepsItsSlam() {
+    var rig = StreamRig()
+    rig.feed(from: 0, to: 1.01, impulseAt: 1.0, impulse: 0.06)
+    // The sample after a stall re-primes before the press resolves, but the press window was clean.
+    rig.feed(from: 1.15, to: 1.2)
+    rig.pipeline.keyEvent(KeyEvent(time: 1.0, keyCode: 0, isRelease: false, isModifier: false), now: 1.16)
+    #expect(drain(rig.queue).map { slot(of: $0, in: sharedBank) } == [.press(.slam)])
+}
+
 @Test func firstPrimeAtSensorStartAlsoSettles() {
     var rig = StreamRig()
     rig.feed(from: 1, to: 2, firstOffset: 0.04)
@@ -92,9 +101,11 @@ private let threshold = SlamMapper(sensitivity: 0.5).threshold
 
 @Test func settleWindowCoversThePressWindowStart() {
     let ring = SampleRing()
-    ring.markUnsettled(until: 2.0)
-    #expect(!ImpactAnalyzer.isSettled(in: ring, keyTime: 2.014))
-    #expect(ImpactAnalyzer.isSettled(in: ring, keyTime: 2.015))
+    ring.markReprimed(at: 1.8)
+    #expect(!ImpactAnalyzer.isSettled(in: ring, keyTime: 2.0145))
+    #expect(ImpactAnalyzer.isSettled(in: ring, keyTime: 2.0155))
+    #expect(!ImpactAnalyzer.isSettled(in: ring, keyTime: 1.7925))
+    #expect(ImpactAnalyzer.isSettled(in: ring, keyTime: 1.7915))
     #expect(ImpactAnalyzer.isSettled(in: SampleRing(), keyTime: 0))
 }
 

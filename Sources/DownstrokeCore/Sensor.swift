@@ -90,7 +90,7 @@ public struct ImpactStream: Sendable {
         if resetRequested || s.time - lastTime > Self.restartGap {
             filter = ImpactFilter()
             resetRequested = false
-            ring.markUnsettled(until: s.time + Self.settleTime)
+            ring.markReprimed(at: s.time)
         }
         lastTime = s.time
         ring.append(time: s.time, impact: filter.process(s))
@@ -104,7 +104,7 @@ public final class SampleRing: @unchecked Sendable {
     private let impactBits: UnsafeMutablePointer<Atomic<UInt32>>
     private let written = Atomic<Int>(0)
     private let writing = Atomic<Int>(0)
-    private let unsettledBits = Atomic<UInt64>((-Double.infinity).bitPattern)
+    private let reprimeBits = Atomic<UInt64>((-Double.infinity).bitPattern)
 
     public init(capacity: Int = 4096) {
         precondition(capacity >= 2, "capacity must be at least 2")
@@ -136,13 +136,13 @@ public final class SampleRing: @unchecked Sendable {
         written.store(n + 1, ordering: .releasing)
     }
 
-    /// Single writer, before the append it covers.
-    public func markUnsettled(until time: Double) {
-        unsettledBits.store(time.bitPattern, ordering: .releasing)
+    /// Single writer, before appending the sample the filter re-primed on.
+    public func markReprimed(at time: Double) {
+        reprimeBits.store(time.bitPattern, ordering: .releasing)
     }
 
-    /// Impacts before this time may still carry a filter priming error.
-    public var unsettledUntil: Double { Double(bitPattern: unsettledBits.load(ordering: .acquiring)) }
+    /// Time of the latest filter re-prime; impacts for `ImpactStream.settleTime` after it may carry a priming error.
+    public var lastReprime: Double { Double(bitPattern: reprimeBits.load(ordering: .acquiring)) }
 
     /// Samples appended so far.
     public var count: Int { written.load(ordering: .relaxed) }
@@ -175,17 +175,21 @@ public final class SampleRing: @unchecked Sendable {
 }
 
 public enum ImpactAnalyzer {
+    public static let preMs = 15.0
+    public static let postMs = 8.0
+
     /// Largest filtered impact from `preMs` before to `postMs` after the key event; nil until that window has been sampled.
     public static func peak(
-        in ring: SampleRing, keyTime: Double, preMs: Double = 15, postMs: Double = 8
+        in ring: SampleRing, keyTime: Double, preMs: Double = preMs, postMs: Double = postMs
     ) -> Float? {
         let windowEnd = keyTime + postMs / 1000
         guard let latest = ring.latestTime, latest >= windowEnd else { return nil }
         return ring.impacts(from: keyTime - preMs / 1000, to: windowEnd).max()
     }
 
-    /// False when the press window starts before the filter settled from its latest re-prime.
-    public static func isSettled(in ring: SampleRing, keyTime: Double, preMs: Double = 15) -> Bool {
-        keyTime - preMs / 1000 >= ring.unsettledUntil
+    /// False when the press window overlaps the settle time after the latest re-prime.
+    public static func isSettled(in ring: SampleRing, keyTime: Double, preMs: Double = preMs, postMs: Double = postMs) -> Bool {
+        let reprime = ring.lastReprime
+        return keyTime + postMs / 1000 < reprime || keyTime - preMs / 1000 >= reprime + ImpactStream.settleTime
     }
 }

@@ -92,13 +92,13 @@ enum DebugSelfTest {
             // Catches a wrong timestamp unit: samples must sit on the MonotonicClock timebase.
             let lag = MonotonicClock.now() - (ring.latestTime ?? 0)
             check(lag >= 0 && lag < 0.05, "latest sample is on the MonotonicClock timebase, round \(round)")
-            check(ring.unsettledUntil > 0, "the first sample marks the filter settling, round \(round)")
+            check(ring.lastReprime > 0, "the first sample marks a filter re-prime, round \(round)")
             let rewakeAt = MonotonicClock.now()
             sensor.rewake()
             try? await Task.sleep(for: .milliseconds(200))
             check(sensor.isStreaming, "sensor streams after rewake, round \(round)")
-            check(ring.unsettledUntil >= rewakeAt + ImpactStream.settleTime,
-                  String(format: "rewake re-primes and marks %.0f ms of settling, round \(round)", ImpactStream.settleTime * 1000))
+            // A report stamped just before the rewake may be the one that re-primes.
+            check(ring.lastReprime > rewakeAt - 0.05, "rewake re-primes the filter, round \(round)")
             sensor.stop()
             check(!sensor.isRunning && !sensor.isStreaming, "sensor stops, round \(round)")
         }
@@ -167,6 +167,7 @@ enum DebugSelfTest {
             if case .unavailable = controller.sensorStatus { return true }
             return false
         }
+        controller.permissionOverride = false
         controller.simulatedSensorError = .openFailed(kIOReturnExclusiveAccess)
         controller.start()
         try? await Task.sleep(for: .seconds(5.5))
@@ -205,6 +206,8 @@ enum DebugSelfTest {
             controller.setEnabled(false)
             defaults.removePersistentDomain(forName: AudioRig.isolatedSuite)
         }
+        // No real tap, so typing during the test can't reach the readout.
+        controller.permissionOverride = false
         controller.start()
         let engine = controller.engine
         guard engine.isRunning else { return check(false, "engine starts") }

@@ -380,7 +380,6 @@ final class AppController: ObservableObject {
     private func didWake() {
         tapRetry.reset()
         sensorRetry.reset()
-        if case .unavailable = sensorStatus { sensorStatus = .off }
         if sensor.isRunning { sensor.rewake() }
         apply()
     }
@@ -416,13 +415,15 @@ final class AppController: ObservableObject {
             sensorAvailable = streaming
             updatePipeline()
         }
-        let permission = hasListenPermission
-        if permission != lastPermission {
-            lastPermission = permission
-            tapRetry.reset()
+        if settings.enabled && !tap.isRunning {
+            let permission = hasListenPermission
+            if permission != lastPermission {
+                lastPermission = permission
+                tapRetry.reset()
+            }
+            if permission { startTap() }
         }
-        if settings.enabled && !tap.isRunning && permission { startTap() }
-        if settings.enabled && settings.hitStrengthEnabled && !sensor.isRunning, case .unavailable = sensorStatus { startSensor() }
+        if settings.enabled && settings.hitStrengthEnabled, case .unavailable = sensorStatus { startSensor() }
         if settings.enabled {
             idler.tick(now: MonotonicClock.now())
         } else if engine.isRunning && MonotonicClock.now() >= auditionUntil && mixer.activeVoices == 0 {

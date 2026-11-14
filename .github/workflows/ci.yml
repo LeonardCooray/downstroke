@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  test-and-build:
+    name: test-and-build (${{ matrix.toolchain }})
+    # macOS 27 runner: the package targets macOS 27, which macos-26 can't run.
+    runs-on: xcode-27
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # The Command Line Tools are the supported local toolchain; Xcode is the image default.
+        include:
+          - toolchain: clt
+            developer-dir: /Library/Developer/CommandLineTools
+          - toolchain: xcode
+            developer-dir: /Applications/Xcode.app/Contents/Developer
+    env:
+      DEVELOPER_DIR: ${{ matrix.developer-dir }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Toolchain
+        run: |
+          xcrun --find swift
+          swift --version
+          xcrun --show-sdk-version
+
+      - name: Test
+        run: scripts/test.sh
+
+      - name: Build app (release, ad-hoc signed)
+        run: scripts/bundle.sh
+
+      - name: Verify signature
+        run: codesign --verify --strict build/Downstroke.app
+
+      # Self-tests and --bench need a window server, Input Monitoring and real audio, so they stay local.

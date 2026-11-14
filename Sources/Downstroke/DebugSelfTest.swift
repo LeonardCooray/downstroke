@@ -41,7 +41,7 @@ enum DebugSelfTest {
         Task { @MainActor in
             switch args[i + 1] {
             case "tap-reenable": tapReenable(); await tapRetry()
-            case "sensor-restart": await sensorRestart(); await sensorRetry()
+            case "sensor-restart": await sensorRestart(); await sensorRetry(); await sensorRetryLimit()
             case "audio": await audio(); await failedStartLatency()
             case "audio-reconfigure": await audioReconfigure()
             case "engine-pause": await enginePause()
@@ -217,6 +217,22 @@ enum DebugSelfTest {
         let span = (missingTries.last ?? 0) - (missingTries.first ?? 0)
         check(missingTries.count == 4 && span < 2.5,
               String(format: "no device after opening gets 4 quick tries from the initial delay, apart from earlier open failures (%d attempts over %.2f s)", missingTries.count, span))
+    }
+
+    static func sensorRetryLimit() async {
+        guard let (controller, defaults) = retryController(accent: true, sensorRetry: RetryBackoff(initial: 0.25, cap: 0.25)) else {
+            return check(false, "isolated defaults suite")
+        }
+        defer {
+            controller.setEnabled(false)
+            defaults.removePersistentDomain(forName: AudioRig.isolatedSuite)
+        }
+        controller.permissionOverride = false
+        controller.simulatedSensorError = .openFailed(kIOReturnExclusiveAccess)
+        controller.start()
+        try? await Task.sleep(for: .seconds(8))
+        check(controller.sensorStartAttempts.count == 10,
+              "a sensor that keeps failing to open stops after 10 tries (\(controller.sensorStartAttempts.count) attempts)")
     }
 
     // Triggers queued while the engine won't start stay out of the latency readout.

@@ -71,3 +71,14 @@ import Testing
     backoff.failed(now: 6, kind: 2, limit: 4)
     #expect(!backoff.isStopped && backoff.failures == 1)
 }
+
+@Test func alternatingKindsStillBackOffAndReachTheLimit() {
+    var backoff = RetryBackoff(initial: 1, cap: 60)
+    var delays: [Double] = []
+    for i in 0..<7 {
+        backoff.failed(now: Double(i), kind: i % 2, limit: 4)
+        delays.append(backoff.delay)
+    }
+    #expect(delays == [1, 1, 2, 2, 4, 4, 8])
+    #expect(backoff.isStopped)
+}

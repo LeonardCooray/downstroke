@@ -338,6 +338,7 @@ final class AppController: ObservableObject {
         } catch KeyTapError.permissionDenied {
             permissionMissing = true
             listening = false
+            tapRetry.failed(now: MonotonicClock.now())
         } catch {
             permissionMissing = false
             listening = false
@@ -355,19 +356,15 @@ final class AppController: ObservableObject {
         } catch {
             let status = SensorStatus.unavailable("\(error)")
             if status != sensorStatus { sensorStatus = status }
-            let missing: Bool
-            switch error {
-            case MotionSensorError.notFound, MotionSensorError.noDevice: missing = true
-            default: missing = false
-            }
-            // A few quick tries cover a sensor still enumerating after wake; a Mac with none won't grow one.
-            sensorRetry.failed(now: MonotonicClock.now(), kind: missing ? 1 : 0, limit: missing ? 4 : nil)
+            // A few quick tries cover a sensor still enumerating after wake; about 4 min covers another app's hold.
+            let missing = (error as? MotionSensorError)?.isMissing ?? false
+            sensorRetry.failed(now: MonotonicClock.now(), kind: missing ? 1 : 0, limit: missing ? 4 : 10)
         }
     }
 
     private func stopSensor() {
         sensor.stop()
-        sensorStatus = .off
+        if sensorStatus != .off { sensorStatus = .off }
     }
 
     private func contextChanged() {

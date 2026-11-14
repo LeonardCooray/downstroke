@@ -1,10 +1,11 @@
-/// Retry delays doubling from `initial` up to `cap`; a new kind of failure starts again from `initial`.
+/// Retry delays doubling from `initial` up to `cap`, counted per kind of failure since the last `reset()`.
 public struct RetryBackoff: Sendable {
     public let initial: Double
     public let cap: Double
+    /// Failures of the latest kind since the last reset.
     public private(set) var failures = 0
     private var nextAttempt = -Double.infinity
-    private var lastKind: Int?
+    private var counts: [Int: Int] = [:]
 
     public init(initial: Double, cap: Double) {
         self.initial = initial
@@ -23,19 +24,18 @@ public struct RetryBackoff: Sendable {
 
     public func isDue(now: Double) -> Bool { now >= nextAttempt }
 
-    /// `limit`: stop once this many failures of `kind` have come in a row.
+    /// `limit`: stop once this many failures of `kind` have come since the last reset.
     public mutating func failed(now: Double, kind: Int = 0, limit: Int? = nil) {
         guard !isStopped else { return }
-        if kind != lastKind { failures = 0 }
-        lastKind = kind
-        failures += 1
+        failures = counts[kind, default: 0] + 1
+        counts[kind] = failures
         nextAttempt = now + delay
         if let limit, failures >= limit { stop() }
     }
 
     public mutating func reset() {
         failures = 0
-        lastKind = nil
+        counts = [:]
         nextAttempt = -.infinity
     }
 

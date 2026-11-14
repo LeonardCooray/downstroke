@@ -17,6 +17,14 @@ enum MotionSensorError: Error, CustomStringConvertible {
         case .noDevice: "IOHIDManager opened but returned no accelerometer device"
         }
     }
+
+    /// No accelerometer to open, as opposed to one that failed to open.
+    var isMissing: Bool {
+        switch self {
+        case .notFound, .noDevice: true
+        case .openFailed: false
+        }
+    }
 }
 
 /// Streams the SPU accelerometer on its own thread into a SampleRing as filtered impacts.

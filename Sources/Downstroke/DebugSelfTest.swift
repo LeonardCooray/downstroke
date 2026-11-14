@@ -819,7 +819,7 @@ enum DebugSelfTest {
 
     /// Reads pixels of the rendered meter: orange only past the centre, grey below it, and the tick in the middle gap.
     private static func checkMeterRendering() {
-        let segments = MeterModel.segments, bar: CGFloat = 10, gap: CGFloat = 3, scale: CGFloat = 2
+        let segments = MeterModel.segments, bar: CGFloat = 10, gap = HitMeter.spacing, scale: CGFloat = 2
         let width = CGFloat(segments) * bar + CGFloat(segments - 1) * gap
         for (scheme, name) in [(ColorScheme.light, "light"), (.dark, "dark")] {
             for lit in [8, 11, 16] {
@@ -827,7 +827,7 @@ enum DebugSelfTest {
                 meter.show(lit)
                 let renderer = ImageRenderer(content: HitMeter(meter: meter).frame(width: width).environment(\.colorScheme, scheme))
                 renderer.scale = scale
-                guard let image = renderer.cgImage else { return check(false, "meter renders (\(name))") }
+                guard let image = renderer.cgImage else { check(false, "meter \(lit) lit renders (\(name))"); continue }
                 let rep = NSBitmapImageRep(cgImage: image)
                 func pixel(_ x: CGFloat, up y: CGFloat) -> NSColor? {
                     rep.colorAt(x: Int(x * scale), y: rep.pixelsHigh - 1 - Int(y * scale))?.usingColorSpace(.sRGB)
@@ -844,27 +844,16 @@ enum DebugSelfTest {
                           String(format: "meter \(lit) lit (\(name)): grey below the tick stands out from unlit bars (%.2f vs %.2f)",
                                  alpha[..<(segments / 2)].min()!, alpha[lit...].max()!))
                 }
-                let tick = pixel(width / 2, up: 11)?.alphaComponent ?? 0
-                let otherGap = pixel(4 * (bar + gap) - gap / 2, up: 11)?.alphaComponent ?? 0
+                let tick = pixel(width / 2, up: HitMeter.height / 2)?.alphaComponent ?? 0
+                let otherGap = pixel(4 * (bar + gap) - gap / 2, up: HitMeter.height / 2)?.alphaComponent ?? 0
                 check(tick > 0.2 && otherGap < 0.05,
                       String(format: "meter \(lit) lit (\(name)): threshold tick in the centre gap (%.2f, other gaps %.2f)", tick, otherGap))
             }
         }
     }
 
-    /// One synthetic slam through the controller's pipeline and ring, which have no other writer while the accent is off.
     private static func checkSlamRow(_ controller: AppController, _ diagnostics: DiagnosticsModel) {
-        guard let board = controller.boards.first(where: { $0.id == controller.settings.boardID }),
-              let bank = try? SampleBank(board: board, sampleRate: controller.engine.sampleRate > 0 ? controller.engine.sampleRate : 48_000)
-        else { return check(false, "bank for the synthetic slam") }
-        var accent = controller.settings
-        accent.hitStrengthEnabled = true
-        controller.pipeline.update(settings: accent, bank: bank, sensorAvailable: true)
-        let t = MonotonicClock.now()
-        controller.ring.append(time: t, impact: 0.05)
-        controller.ring.append(time: t + 0.009, impact: 0.001)
-        let played = controller.pipeline.keyEvent(KeyEvent(time: t, keyCode: 0, isRelease: false, isModifier: false), now: t + 0.01)
-        controller.pipeline.update(settings: controller.settings, bank: bank, sensorAvailable: controller.sensorAvailable)
+        let played = controller.simulateSlam()
         diagnostics.sample()
         let snap = diagnostics.snapshot
         check(played && snap.slams == 1 && snap.report.contains("Slams since launch: 1"),

@@ -69,6 +69,34 @@ public struct ImpactFilter: Sendable {
     }
 }
 
+/// Filters samples into a ring; a gap or reset re-primes the filter and marks the ring unsettled.
+public struct ImpactStream: Sendable {
+    /// A gap longer than this between samples re-primes the filter.
+    public static let restartGap = 0.1
+    /// The 5 Hz filter's step response stays under 1% of a priming error from 164 ms on.
+    public static let settleTime = 0.2
+
+    private var filter = ImpactFilter()
+    private var lastTime = -Double.infinity
+    private var resetRequested = false
+
+    public init() {}
+
+    /// Re-primes on the next sample.
+    public mutating func reset() { resetRequested = true }
+
+    /// Single writer, like `SampleRing.append`.
+    public mutating func append(_ s: AccelSample, to ring: SampleRing) {
+        if resetRequested || s.time - lastTime > Self.restartGap {
+            filter = ImpactFilter()
+            resetRequested = false
+            ring.markUnsettled(until: s.time + Self.settleTime)
+        }
+        lastTime = s.time
+        ring.append(time: s.time, impact: filter.process(s))
+    }
+}
+
 /// Fixed-size history of filtered impacts. One writer appends; any thread may read.
 public final class SampleRing: @unchecked Sendable {
     private let capacity: Int
@@ -76,6 +104,7 @@ public final class SampleRing: @unchecked Sendable {
     private let impactBits: UnsafeMutablePointer<Atomic<UInt32>>
     private let written = Atomic<Int>(0)
     private let writing = Atomic<Int>(0)
+    private let unsettledBits = Atomic<UInt64>((-Double.infinity).bitPattern)
 
     public init(capacity: Int = 4096) {
         precondition(capacity >= 2, "capacity must be at least 2")
@@ -106,6 +135,14 @@ public final class SampleRing: @unchecked Sendable {
         impactBits[slot].store(impact.bitPattern, ordering: .relaxed)
         written.store(n + 1, ordering: .releasing)
     }
+
+    /// Single writer, before the append it covers.
+    public func markUnsettled(until time: Double) {
+        unsettledBits.store(time.bitPattern, ordering: .releasing)
+    }
+
+    /// Impacts before this time may still carry a filter priming error.
+    public var unsettledUntil: Double { Double(bitPattern: unsettledBits.load(ordering: .acquiring)) }
 
     /// Samples appended so far.
     public var count: Int { written.load(ordering: .relaxed) }
@@ -145,5 +182,10 @@ public enum ImpactAnalyzer {
         let windowEnd = keyTime + postMs / 1000
         guard let latest = ring.latestTime, latest >= windowEnd else { return nil }
         return ring.impacts(from: keyTime - preMs / 1000, to: windowEnd).max()
+    }
+
+    /// False when the press window starts before the filter settled from its latest re-prime.
+    public static func isSettled(in ring: SampleRing, keyTime: Double, preMs: Double = 15) -> Bool {
+        keyTime - preMs / 1000 >= ring.unsettledUntil
     }
 }

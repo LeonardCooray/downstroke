@@ -132,8 +132,13 @@ public final class TypingPipeline: @unchecked Sendable {
             guard now >= e.time + Self.windowDelay else { return }
             var hit: (velocity: Float, level: Float)?
             if let ring, let peak = ImpactAnalyzer.peak(in: ring, keyTime: e.time) {
-                let mapper = SlamMapper(sensitivity: s.settings.sensitivity)
-                hit = (mapper.velocity(forPeak: peak), mapper.meterLevel(forPeak: peak))
+                // Just after a re-prime the filter's priming error can read as a slam.
+                if ImpactAnalyzer.isSettled(in: ring, keyTime: e.time) {
+                    let mapper = SlamMapper(sensitivity: s.settings.sensitivity)
+                    hit = (mapper.velocity(forPeak: peak), mapper.meterLevel(forPeak: peak))
+                } else {
+                    hit = (Self.fixedVelocity, 0)
+                }
             } else if now >= e.time + Self.flushDelay {
                 hit = (Self.fixedVelocity, 0)
             }

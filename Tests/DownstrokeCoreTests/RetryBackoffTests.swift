@@ -49,3 +49,25 @@ import Testing
     #expect(backoff.delay == 10)
     #expect(backoff.isDue(now: 10) && !backoff.isDue(now: 9.99))
 }
+
+@Test func aNewKindOfFailureStartsFromTheInitialDelay() {
+    var backoff = RetryBackoff(initial: 1, cap: 60)
+    for t in 0..<7 { backoff.failed(now: Double(t), kind: 1) }
+    #expect(backoff.delay == 60)
+    backoff.failed(now: 100, kind: 2)
+    #expect(backoff.failures == 1 && backoff.delay == 1)
+    #expect(backoff.isDue(now: 101))
+}
+
+@Test func limitStopsAfterThatManyFailuresOfOneKind() {
+    var backoff = RetryBackoff(initial: 1, cap: 60)
+    backoff.failed(now: 0, kind: 1)
+    backoff.failed(now: 1, kind: 1)
+    for t in 2..<5 { backoff.failed(now: Double(t), kind: 2, limit: 4) }
+    #expect(!backoff.isStopped)
+    backoff.failed(now: 5, kind: 2, limit: 4)
+    #expect(backoff.isStopped)
+    backoff.reset()
+    backoff.failed(now: 6, kind: 2, limit: 4)
+    #expect(!backoff.isStopped && backoff.failures == 1)
+}

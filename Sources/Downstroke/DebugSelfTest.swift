@@ -212,9 +212,11 @@ enum DebugSelfTest {
         _ = await waitUntil(2) { controller.sensorRetryFailures >= 3 }
         controller.simulatedSensorError = .noDevice
         let beforeMissing = controller.sensorStartAttempts.count
-        try? await Task.sleep(for: .seconds(11))
-        check(controller.sensorStartAttempts.count == beforeMissing + 4,
-              "no device after opening gets the same few tries, counted apart from earlier open failures (\(controller.sensorStartAttempts.count - beforeMissing) attempts)")
+        try? await Task.sleep(for: .seconds(6))
+        let missingTries = Array(controller.sensorStartAttempts.dropFirst(beforeMissing))
+        let span = (missingTries.last ?? 0) - (missingTries.first ?? 0)
+        check(missingTries.count == 4 && span < 2.5,
+              String(format: "no device after opening gets 4 quick tries from the initial delay, apart from earlier open failures (%d attempts over %.2f s)", missingTries.count, span))
     }
 
     // Triggers queued while the engine won't start stay out of the latency readout.

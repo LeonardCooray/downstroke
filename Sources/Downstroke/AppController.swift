@@ -137,7 +137,6 @@ final class AppController: ObservableObject {
     private var tapRetry: RetryBackoff
     private var sensorRetry: RetryBackoff
     private var lastPermission: Bool?
-    private var sensorMissingTries = 0
 
     /// `engineIdleTimeout`: seconds without a key, audition or sound before the engine pauses.
     /// `tapRetry` and `sensorRetry`: backoff after a start fails other than for permission.
@@ -336,10 +335,13 @@ final class AppController: ObservableObject {
             permissionMissing = false
             listening = true
             tapRetry.reset()
-        } catch {
-            permissionMissing = !hasListenPermission
+        } catch KeyTapError.permissionDenied {
+            permissionMissing = true
             listening = false
-            if !permissionMissing { tapRetry.failed(now: MonotonicClock.now()) }
+        } catch {
+            permissionMissing = false
+            listening = false
+            tapRetry.failed(now: MonotonicClock.now())
         }
     }
 
@@ -351,15 +353,15 @@ final class AppController: ObservableObject {
             sensorStatus = .starting
             sensorRetry.reset()
         } catch {
-            sensorStatus = .unavailable("\(error)")
-            sensorRetry.failed(now: MonotonicClock.now())
-            // A few quick tries cover a sensor still enumerating after wake; a Mac with none won't grow one.
-            if sensorRetry.failures == 1 { sensorMissingTries = 0 }
+            let status = SensorStatus.unavailable("\(error)")
+            if status != sensorStatus { sensorStatus = status }
+            let missing: Bool
             switch error {
-            case MotionSensorError.notFound, MotionSensorError.noDevice: sensorMissingTries += 1
-            default: sensorMissingTries = 0
+            case MotionSensorError.notFound, MotionSensorError.noDevice: missing = true
+            default: missing = false
             }
-            if sensorMissingTries >= 4 { sensorRetry.stop() }
+            // A few quick tries cover a sensor still enumerating after wake; a Mac with none won't grow one.
+            sensorRetry.failed(now: MonotonicClock.now(), kind: missing ? 1 : 0, limit: missing ? 4 : nil)
         }
     }
 

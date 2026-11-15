@@ -69,6 +69,34 @@ public struct ImpactFilter: Sendable {
     }
 }
 
+/// Filters samples into a ring; after a gap or reset it re-primes and writes zero impact until the filter settles.
+public struct ImpactStream: Sendable {
+    /// A gap longer than this between samples re-primes the filter.
+    public static let restartGap = 0.1
+    /// The 5 Hz filter's step response stays under 1% of a priming error from 164 ms on.
+    public static let settleTime = 0.2
+
+    private var filter = ImpactFilter()
+    private var lastTime = -Double.infinity
+    private var settledAt = -Double.infinity
+
+    public init() {}
+
+    /// Re-primes on the next sample.
+    public mutating func reset() { lastTime = -.infinity }
+
+    /// Single writer, like `SampleRing.append`.
+    public mutating func append(_ s: AccelSample, to ring: SampleRing) {
+        if s.time - lastTime > Self.restartGap {
+            filter = ImpactFilter()
+            settledAt = s.time + Self.settleTime
+        }
+        lastTime = s.time
+        let impact = filter.process(s)
+        ring.append(time: s.time, impact: s.time < settledAt ? 0 : impact)
+    }
+}
+
 /// Fixed-size history of filtered impacts. One writer appends; any thread may read.
 public final class SampleRing: @unchecked Sendable {
     private let capacity: Int

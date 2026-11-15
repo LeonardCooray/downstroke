@@ -17,6 +17,14 @@ enum MotionSensorError: Error, CustomStringConvertible {
         case .noDevice: "IOHIDManager opened but returned no accelerometer device"
         }
     }
+
+    /// No accelerometer to open, as opposed to one that failed to open.
+    var isMissing: Bool {
+        switch self {
+        case .notFound, .noDevice: true
+        case .openFailed: false
+        }
+    }
 }
 
 /// Streams the SPU accelerometer on its own thread into a SampleRing as filtered impacts.
@@ -27,7 +35,6 @@ final class MotionSensor: @unchecked Sendable {
     static let dataOffset = 6
     static let scale: Float = 65536
     static let bufferSize = 4096
-    static let restartGap = 0.1
 
     // CF handles are thread-safe; the mutex guards the references.
     private struct State: @unchecked Sendable {
@@ -48,8 +55,7 @@ final class MotionSensor: @unchecked Sendable {
     // Sensor-thread confined.
     private var cachedHandler: (@Sendable (Double) -> Void)?
     private var cachedVersion = -1
-    private var filter = ImpactFilter()
-    private var lastSampleTime = 0.0
+    private var stream = ImpactStream()
     private var devices: [IOHIDDevice] = []
 
     init(ring: SampleRing) {
@@ -77,6 +83,10 @@ final class MotionSensor: @unchecked Sendable {
 
     func start() throws {
         guard !isRunning else { return }
+        #if DEBUG
+        startAttempts.append(MonotonicClock.now())
+        if let simulatedStartError { throw simulatedStartError }
+        #endif
         let ready = DispatchSemaphore(value: 0)
         let done = DispatchSemaphore(value: 0)
         stopRequested.store(false, ordering: .relaxed)
@@ -178,8 +188,7 @@ final class MotionSensor: @unchecked Sendable {
         let loop = CFRunLoopGetCurrent()!
         let buffers = devices.map { _ in UnsafeMutablePointer<UInt8>.allocate(capacity: Self.bufferSize) }
         defer { buffers.forEach { $0.deallocate() } }
-        filter = ImpactFilter()
-        lastSampleTime = 0
+        stream = ImpactStream()
         filterResetRequested.store(false, ordering: .relaxed)
         let context = Unmanaged.passUnretained(self).toOpaque()
         for (device, buffer) in zip(devices, buffers) {
@@ -217,11 +226,8 @@ final class MotionSensor: @unchecked Sendable {
         // HID report timestamps are mach ticks.
         let time = timestamp != 0 ? MonotonicClock.seconds(fromMachTicks: timestamp) : MonotonicClock.now()
         let resetRequested = filterResetRequested.load(ordering: .relaxed) && filterResetRequested.exchange(false, ordering: .acquiring)
-        if resetRequested || time - lastSampleTime > Self.restartGap {
-            filter = ImpactFilter()
-        }
-        lastSampleTime = time
-        ring.append(time: time, impact: filter.process(AccelSample(time: time, x: axis(0), y: axis(1), z: axis(2))))
+        if resetRequested { stream.reset() }
+        stream.append(AccelSample(time: time, x: axis(0), y: axis(1), z: axis(2)), to: ring)
         lastSampleBits.store(time.bitPattern, ordering: .relaxed)
         // Re-reads the handler only when it changed, so a sample takes no lock.
         let version = handlerVersion.load(ordering: .acquiring)
@@ -231,6 +237,13 @@ final class MotionSensor: @unchecked Sendable {
         }
         cachedHandler?(time)
     }
+
+    #if DEBUG
+    /// Main thread. Makes every start() throw this until cleared.
+    var simulatedStartError: MotionSensorError?
+    /// Main thread. When each start() was attempted.
+    private(set) var startAttempts: [Double] = []
+    #endif
 }
 
 private func motionReportCallback(context: UnsafeMutableRawPointer?, result: IOReturn, sender: UnsafeMutableRawPointer?,

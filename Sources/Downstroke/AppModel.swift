@@ -48,7 +48,7 @@ struct PanelState: Equatable {
         status = Self.status(
             enabled: s.enabled, permissionMissing: c.permissionMissing, frontmostBundleID: c.frontmostBundleID,
             mutedBundleIDs: s.mutedBundleIDs, micInUse: c.micInUse, muteWhileMicInUse: s.muteWhileMicInUse,
-            boardName: boardName, hotkeyUnavailable: c.hotkeyError != nil, appName: Self.appName)
+            boardName: boardName, hotkeyUnavailable: c.hotkeyError != nil, listening: c.listening, appName: Self.appName)
         // Same condition the pipeline uses, so the meter never animates over fixed-strength presses.
         fixedStrength = !(c.sensorAvailable && s.hitStrengthEnabled)
         meterNote = Self.meterNote(appEnabled: s.enabled, accentEnabled: s.hitStrengthEnabled, sensorStatus: c.sensorStatus)
@@ -79,10 +79,11 @@ struct PanelState: Equatable {
     static func status(
         enabled: Bool, permissionMissing: Bool, frontmostBundleID: String?, mutedBundleIDs: [String],
         micInUse: Bool, muteWhileMicInUse: Bool, boardName: String, hotkeyUnavailable: Bool = false,
-        appName: (String) -> String
+        listening: Bool = true, appName: (String) -> String
     ) -> String {
         if !enabled { return "Off" }
         if permissionMissing { return "Needs Input Monitoring" }
+        if !listening { return "Not listening" }
         if let app = frontmostBundleID, mutedBundleIDs.contains(app) { return "Muted in \(appName(app))" }
         if micInUse && muteWhileMicInUse { return "Muted: mic in use" }
         if hotkeyUnavailable { return "Hotkey unavailable" }

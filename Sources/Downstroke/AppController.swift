@@ -74,6 +74,13 @@ final class PendingTicker: @unchecked Sendable {
     }
 }
 
+/// Sensor start failures the backoff counts apart, with how many tries each gets.
+private enum SensorFailure: Int {
+    case openFailed, missing
+
+    var tries: Int { self == .missing ? 4 : 10 }
+}
+
 /// Owns the tap, sensor, pipeline, mixer and engine, and publishes their state for the UI.
 @MainActor
 final class AppController: ObservableObject {
@@ -134,11 +141,18 @@ final class AppController: ObservableObject {
     private var sensorStartedAt = 0.0
     // The bank the pipeline holds, kept when the selected board's bank fails to build.
     private var pipelineBank: SampleBank?
+    private var tapRetry: RetryBackoff
+    private var sensorRetry: RetryBackoff
+    private var lastPermission: Bool?
 
     /// `engineIdleTimeout`: seconds without a key, audition or sound before the engine pauses.
+    /// `tapRetry` and `sensorRetry`: backoff after a start fails other than for permission.
     init(defaults: UserDefaults = .standard, loginItems: any LoginItemService = MainAppLoginItem(),
-         engineIdleTimeout: Double = 60) {
+         engineIdleTimeout: Double = 60, tapRetry: RetryBackoff = RetryBackoff(initial: 0.25, cap: 10),
+         sensorRetry: RetryBackoff = RetryBackoff(initial: 1, cap: 60)) {
         store = SettingsStore(defaults: defaults)
+        self.tapRetry = tapRetry
+        self.sensorRetry = sensorRetry
         settings = store.settings
         self.loginItems = loginItems
         loginStatus = loginItems.status
@@ -233,6 +247,12 @@ final class AppController: ObservableObject {
         var next = settings
         change(&next)
         guard next != settings else { return }
+        // Turning something on is a fresh attempt, whatever the backoff says.
+        if next.enabled && !settings.enabled {
+            tapRetry.reset()
+            sensorRetry.reset()
+        }
+        if next.hitStrengthEnabled && !settings.hitStrengthEnabled { sensorRetry.reset() }
         settings = next
         apply()
     }
@@ -305,37 +325,53 @@ final class AppController: ObservableObject {
 
     private func startTap() {
         guard !tap.isRunning else { return }
-        guard KeyTap.hasPermission else {
-            permissionMissing = true
-            listening = false
+        let permission = hasListenPermission
+        // A grant or revoke is a fresh start for the backoff.
+        if permission != lastPermission {
+            lastPermission = permission
+            tapRetry.reset()
+        }
+        guard permission else {
+            if !permissionMissing { permissionMissing = true }
+            if listening { listening = false }
             return
         }
+        guard tapRetry.isDue(now: MonotonicClock.now()) else { return }
         do {
             try tap.start()
             permissionMissing = false
             listening = true
-        } catch {
-            permissionMissing = !KeyTap.hasPermission
+            tapRetry.reset()
+        } catch KeyTapError.permissionDenied {
+            permissionMissing = true
             listening = false
+            tapRetry.failed(now: MonotonicClock.now())
+        } catch {
+            permissionMissing = false
+            listening = false
+            tapRetry.failed(now: MonotonicClock.now())
         }
     }
 
     private func startSensor() {
-        guard !sensor.isRunning else { return }
-        if case .unavailable = sensorStatus { return }
+        guard !sensor.isRunning, sensorRetry.isDue(now: MonotonicClock.now()) else { return }
         do {
             try sensor.start()
             sensorStartedAt = MonotonicClock.now()
             sensorStatus = .starting
+            sensorRetry.reset()
         } catch {
-            sensorStatus = .unavailable("\(error)")
+            let status = SensorStatus.unavailable("\(error)")
+            if status != sensorStatus { sensorStatus = status }
+            // A few quick tries cover a sensor still enumerating after wake; about 4 min covers another app's hold.
+            let failure: SensorFailure = (error as? MotionSensorError)?.isMissing == true ? .missing : .openFailed
+            sensorRetry.failed(now: MonotonicClock.now(), kind: failure.rawValue, limit: failure.tries)
         }
     }
 
     private func stopSensor() {
         sensor.stop()
-        if case .unavailable = sensorStatus { return }
-        sensorStatus = .off
+        if sensorStatus != .off { sensorStatus = .off }
     }
 
     private func contextChanged() {
@@ -359,7 +395,8 @@ final class AppController: ObservableObject {
     }
 
     private func didWake() {
-        if case .unavailable = sensorStatus { sensorStatus = .off }
+        tapRetry.reset()
+        sensorRetry.reset()
         if sensor.isRunning { sensor.rewake() }
         apply()
     }
@@ -395,7 +432,8 @@ final class AppController: ObservableObject {
             sensorAvailable = streaming
             updatePipeline()
         }
-        if settings.enabled && !tap.isRunning && KeyTap.hasPermission { startTap() }
+        if settings.enabled && !tap.isRunning { startTap() }
+        if settings.enabled && settings.hitStrengthEnabled, case .unavailable = sensorStatus { startSensor() }
         if settings.enabled {
             idler.tick(now: MonotonicClock.now())
         } else if engine.isRunning && MonotonicClock.now() >= auditionUntil && mixer.activeVoices == 0 {
@@ -406,7 +444,30 @@ final class AppController: ObservableObject {
     #if DEBUG
     /// Delivers `e` through the key tap's own handler, on the caller's thread.
     nonisolated func simulateKeyEvent(_ e: KeyEvent) { tap.onEvent?(e) }
+
+    /// Stands in for the Input Monitoring check; nil uses the real one.
+    var permissionOverride: Bool?
+    var simulatedTapFailure: Bool {
+        get { tap.simulatedCreationFailure }
+        set { tap.simulatedCreationFailure = newValue }
+    }
+    var tapStartAttempts: [Double] { tap.startAttempts }
+    var tapRetryFailures: Int { tapRetry.failures }
+    var simulatedSensorError: MotionSensorError? {
+        get { sensor.simulatedStartError }
+        set { sensor.simulatedStartError = newValue }
+    }
+    var sensorStartAttempts: [Double] { sensor.startAttempts }
+    var sensorRetryFailures: Int { sensorRetry.failures }
+    func simulateWake() { didWake() }
     #endif
+
+    private var hasListenPermission: Bool {
+        #if DEBUG
+        if let permissionOverride { return permissionOverride }
+        #endif
+        return KeyTap.hasPermission
+    }
 
     // Falls back to the pipeline's current bank, so settings still land when a bank fails to build.
     private func updatePipeline(_ bank: SampleBank? = nil) {

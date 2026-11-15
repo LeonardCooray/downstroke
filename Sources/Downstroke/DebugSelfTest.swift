@@ -40,9 +40,9 @@ enum DebugSelfTest {
         guard let i = args.firstIndex(of: "--self-test"), i + 1 < args.count else { return }
         Task { @MainActor in
             switch args[i + 1] {
-            case "tap-reenable": tapReenable()
-            case "sensor-restart": await sensorRestart()
-            case "audio": await audio()
+            case "tap-reenable": tapReenable(); await tapRetry()
+            case "sensor-restart": await sensorRestart(); await sensorRetry(); await sensorRetryLimit()
+            case "audio": await audio(); await failedStartLatency()
             case "audio-reconfigure": await audioReconfigure()
             case "engine-pause": await enginePause()
             case "mic": await mic()
@@ -82,6 +82,7 @@ enum DebugSelfTest {
         let ring = SampleRing()
         let sensor = MotionSensor(ring: ring)
         for round in 1...2 {
+            let startedAt = MonotonicClock.now()
             do {
                 try sensor.start()
             } catch {
@@ -92,12 +93,174 @@ enum DebugSelfTest {
             // Catches a wrong timestamp unit: samples must sit on the MonotonicClock timebase.
             let lag = MonotonicClock.now() - (ring.latestTime ?? 0)
             check(lag >= 0 && lag < 0.05, "latest sample is on the MonotonicClock timebase, round \(round)")
+            let settling = ring.impacts(from: startedAt + 0.02, to: startedAt + 0.15)
+            check(!settling.isEmpty && settling.allSatisfy { $0 == 0 }, "impacts read zero while the filter settles after start, round \(round)")
+            check(ring.impacts(from: startedAt + 0.35, to: MonotonicClock.now()).contains { $0 > 0 }, "and real impacts once it has settled, round \(round)")
             sensor.rewake()
+            let rewakeAt = MonotonicClock.now()
             try? await Task.sleep(for: .milliseconds(200))
             check(sensor.isStreaming, "sensor streams after rewake, round \(round)")
+            let resettling = ring.impacts(from: rewakeAt + 0.01, to: rewakeAt + 0.15)
+            check(!resettling.isEmpty && resettling.allSatisfy { $0 == 0 }, "rewake re-primes and impacts read zero while it settles, round \(round)")
             sensor.stop()
             check(!sensor.isRunning && !sensor.isStreaming, "sensor stops, round \(round)")
         }
+    }
+
+    /// Isolated defaults, volume 0, accent as given; the caller removes the suite.
+    private static func retryController(accent: Bool, tapRetry: RetryBackoff = RetryBackoff(initial: 0.25, cap: 10),
+                                        sensorRetry: RetryBackoff = RetryBackoff(initial: 1, cap: 60)) -> (AppController, UserDefaults)? {
+        guard let defaults = isolatedDefaults() else { return nil }
+        let seed = SettingsStore(defaults: defaults)
+        seed.settings.volume = 0
+        seed.settings.hitStrengthEnabled = accent
+        seed.save()
+        return (AppController(defaults: defaults, loginItems: FakeLoginItem(), tapRetry: tapRetry, sensorRetry: sensorRetry), defaults)
+    }
+
+    private static func gaps(_ times: [Double]) -> String {
+        zip(times.dropFirst(), times).map { String(format: "%.2f", $0 - $1) }.joined(separator: ", ")
+    }
+
+    private static func lastGap(_ times: [Double]) -> Double {
+        times.count >= 2 ? times[times.count - 1] - times[times.count - 2] : 0
+    }
+
+    static func tapRetry() async {
+        guard let (controller, defaults) = retryController(accent: false, tapRetry: RetryBackoff(initial: 0.25, cap: 2)) else {
+            return check(false, "isolated defaults suite")
+        }
+        defer {
+            controller.setEnabled(false)
+            defaults.removePersistentDomain(forName: AudioRig.isolatedSuite)
+        }
+        controller.permissionOverride = true
+        controller.simulatedTapFailure = true
+        controller.start()
+        try? await Task.sleep(for: .seconds(5.5))
+        let attempts = controller.tapStartAttempts
+        check(!controller.listening && (4...6).contains(attempts.count),
+              "a refused tap is retried with backoff, not at 4 Hz (\(attempts.count) attempts in 5.5 s, gaps \(gaps(attempts)) s)")
+        check(lastGap(attempts) >= 1.9, String(format: "tap retries back off to the 2 s cap (last gap %.2f s)", lastGap(attempts)))
+
+        controller.permissionOverride = false
+        try? await Task.sleep(for: .seconds(1))
+        let whileMissing = controller.tapStartAttempts.count
+        check(whileMissing == attempts.count || whileMissing == attempts.count + 1, "no tap attempts while permission is missing")
+        controller.permissionOverride = true
+        let picked = await waitUntil(0.6) { controller.tapStartAttempts.count > whileMissing }
+        check(picked != nil && controller.tapRetryFailures == 1,
+              "a permission grant resets the backoff and retries at once (\(controller.tapRetryFailures) failures since)")
+
+        guard KeyTap.hasPermission else { return print("SKIP tap retry success (no Input Monitoring)") }
+        controller.simulatedTapFailure = false
+        let started = await waitUntil(2.5) { controller.listening }
+        check(started != nil && controller.tapRetryFailures == 0, "once the tap can be created a retry starts it and resets the backoff")
+    }
+
+    static func sensorRetry() async {
+        guard let (controller, defaults) = retryController(accent: true, sensorRetry: RetryBackoff(initial: 0.25, cap: 2)) else {
+            return check(false, "isolated defaults suite")
+        }
+        defer {
+            controller.setEnabled(false)
+            defaults.removePersistentDomain(forName: AudioRig.isolatedSuite)
+        }
+        func unavailable() -> Bool {
+            if case .unavailable = controller.sensorStatus { return true }
+            return false
+        }
+        controller.permissionOverride = false
+        controller.simulatedSensorError = .openFailed(kIOReturnExclusiveAccess)
+        controller.start()
+        try? await Task.sleep(for: .seconds(5.5))
+        let attempts = controller.sensorStartAttempts
+        check(unavailable() && (4...6).contains(attempts.count),
+              "a sensor that fails to open is retried with backoff (\(attempts.count) attempts in 5.5 s, gaps \(gaps(attempts)) s)")
+        check(lastGap(attempts) >= 1.9, String(format: "sensor retries back off to the 2 s cap (last gap %.2f s)", lastGap(attempts)))
+
+        controller.simulatedSensorError = nil
+        if MotionSensor.isPresent {
+            let started = await waitUntil(2.5) { controller.sensorStatus == .starting || controller.sensorStatus == .streaming }
+            check(started != nil && controller.sensorRetryFailures == 0,
+                  "once it opens a retry starts the sensor and resets the backoff (\(controller.sensorStatus))")
+        } else {
+            print("SKIP sensor retry success (no accelerometer)")
+        }
+
+        controller.update { $0.hitStrengthEnabled = false }
+        controller.simulatedSensorError = .notFound
+        let before = controller.sensorStartAttempts.count
+        controller.update { $0.hitStrengthEnabled = true }
+        try? await Task.sleep(for: .seconds(2.5))
+        controller.update { $0.volume = 0.01 }
+        try? await Task.sleep(for: .seconds(2))
+        check(unavailable() && controller.sensorStartAttempts.count == before + 4,
+              "no accelerometer: a few quick tries, then none, even on settings changes (\(controller.sensorStartAttempts.count - before) attempts)")
+        controller.simulatedSensorError = nil
+        controller.simulateWake()
+        check(controller.sensorStartAttempts.count == before + 5, "waking from sleep tries the sensor again")
+
+        controller.update { $0.hitStrengthEnabled = false }
+        controller.simulatedSensorError = .openFailed(kIOReturnExclusiveAccess)
+        controller.update { $0.hitStrengthEnabled = true }
+        let failed = unavailable()
+        controller.update { $0.hitStrengthEnabled = false }
+        check(failed && controller.sensorStatus == .off, "turning the accent off clears a sensor error to Off (\(controller.sensorStatus))")
+
+        controller.update { $0.hitStrengthEnabled = true }
+        _ = await waitUntil(2) { controller.sensorRetryFailures >= 3 }
+        controller.simulatedSensorError = .noDevice
+        let beforeMissing = controller.sensorStartAttempts.count
+        try? await Task.sleep(for: .seconds(6))
+        let missingTries = Array(controller.sensorStartAttempts.dropFirst(beforeMissing))
+        let span = (missingTries.last ?? 0) - (missingTries.first ?? 0)
+        check(missingTries.count == 4 && span < 3,
+              String(format: "no device after opening gets 4 quick tries from the initial delay, apart from earlier open failures (%d attempts over %.2f s)", missingTries.count, span))
+    }
+
+    static func sensorRetryLimit() async {
+        guard let (controller, defaults) = retryController(accent: true, sensorRetry: RetryBackoff(initial: 0.25, cap: 0.25)) else {
+            return check(false, "isolated defaults suite")
+        }
+        defer {
+            controller.setEnabled(false)
+            defaults.removePersistentDomain(forName: AudioRig.isolatedSuite)
+        }
+        controller.permissionOverride = false
+        controller.simulatedSensorError = .openFailed(kIOReturnExclusiveAccess)
+        controller.start()
+        try? await Task.sleep(for: .seconds(8))
+        check(controller.sensorStartAttempts.count == 10,
+              "a sensor that keeps failing to open stops after 10 tries (\(controller.sensorStartAttempts.count) attempts)")
+    }
+
+    // Triggers queued while the engine won't start stay out of the latency readout.
+    static func failedStartLatency() async {
+        guard let (controller, defaults) = retryController(accent: false) else { return check(false, "isolated defaults suite") }
+        defer {
+            controller.setEnabled(false)
+            defaults.removePersistentDomain(forName: AudioRig.isolatedSuite)
+        }
+        // No real tap, so typing during the test can't reach the readout.
+        controller.permissionOverride = false
+        controller.start()
+        let engine = controller.engine
+        guard engine.isRunning else { return check(false, "engine starts") }
+        engine.stop()
+        engine.simulatedStartFailure = NSError(domain: "DownstrokeSelfTest", code: 3, userInfo: [NSLocalizedDescriptionKey: "simulated start failure"])
+        let count = controller.latencyCount, last = controller.lastLatency, stale = controller.mixer.staleTriggers
+        controller.audition(controller.settings.boardID)
+        press { controller.simulateKeyEvent($0) }
+        check(!engine.isRunning && controller.engineError != nil, "an audition on an engine that won't start reports the error")
+        try? await Task.sleep(for: .seconds(1.5))
+        engine.simulatedStartFailure = nil
+        controller.update { $0.stereoWidth = 0.3 }
+        let ran = await waitUntil(1) { engine.isRunning }
+        try? await Task.sleep(for: .milliseconds(600))
+        check(ran != nil && controller.engineError == nil, "a later settings change starts the engine")
+        check(controller.latencyCount == count && controller.lastLatency == last && controller.mixer.staleTriggers > stale,
+              "the audition and key queued 1.5 s earlier are dropped, not shown as latency (\(controller.mixer.staleTriggers - stale) dropped, readout \(controller.lastLatency.map { String(format: "%.0f ms", $0 * 1000) } ?? "empty"))")
     }
 
     static func audio() async {
@@ -444,6 +607,10 @@ enum DebugSelfTest {
         check(status() == "Listening · Holy Panda", "status: listening")
         check(status(enabled: false, permission: true) == "Off", "status: off")
         check(status(permission: true) == "Needs Input Monitoring", "status: needs Input Monitoring")
+        check(PanelState.status(
+            enabled: true, permissionMissing: false, frontmostBundleID: nil, mutedBundleIDs: [], micInUse: false,
+            muteWhileMicInUse: true, boardName: "Holy Panda", listening: false, appName: name) == "Not listening",
+              "status: not listening while the key tap is down")
         check(status(front: "us.zoom.xos", mic: true) == "Muted in zoom.us", "status: muted app")
         check(status(front: "com.apple.Notes", mic: true) == "Muted: mic in use", "status: mic in use")
         check(PanelState.footer(p50: 0.0094, bluetooth: false) == "Key → sound 9 ms", "footer: p50 rounded")

@@ -47,6 +47,10 @@ final class KeyTap: @unchecked Sendable {
 
     func start() throws {
         guard !isRunning else { return }
+        #if DEBUG
+        startAttempts.append(MonotonicClock.now())
+        if simulatedCreationFailure { throw KeyTapError.tapCreationFailed }
+        #endif
         guard Self.hasPermission else { throw KeyTapError.permissionDenied }
         let ready = DispatchSemaphore(value: 0)
         let done = DispatchSemaphore(value: 0)
@@ -147,6 +151,11 @@ final class KeyTap: @unchecked Sendable {
     }
 
     #if DEBUG
+    /// Main thread. Makes every start() fail as a refused tap until cleared.
+    var simulatedCreationFailure = false
+    /// Main thread. When each start() was attempted.
+    private(set) var startAttempts: [Double] = []
+
     var isTapEnabled: Bool {
         guard let tap = state.withLock({ $0.tap }) else { return false }
         return CGEvent.tapIsEnabled(tap: tap)

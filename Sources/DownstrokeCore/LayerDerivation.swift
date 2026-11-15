@@ -1,6 +1,6 @@
 import Foundation
 
-/// Velocity layers, centred on 0.125, 0.375, 0.625 and 0.875 of the 0...1 hit strength.
+/// Velocity layers, centred on 0.125, 0.375, 0.625 and 0.875 of the 0...1 velocity.
 public enum Layer: Int, CaseIterable, Sendable {
     case soft, medium, hard, slam
 

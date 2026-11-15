@@ -460,6 +460,20 @@ final class AppController: ObservableObject {
     var sensorStartAttempts: [Double] { sensor.startAttempts }
     var sensorRetryFailures: Int { sensorRetry.failures }
     func simulateWake() { didWake() }
+
+    /// One press over a slam-sized impact with the accent briefly on; needs the sensor off, as the ring's only writer.
+    func simulateSlam() -> Bool {
+        guard !sensor.isRunning, let bank = pipelineBank else { return false }
+        var accent = settings
+        accent.hitStrengthEnabled = true
+        pipeline.update(settings: accent, bank: bank, sensorAvailable: true)
+        let t = MonotonicClock.now()
+        ring.append(time: t, impact: 0.05)
+        ring.append(time: t + 0.009, impact: 0.001)
+        let played = pipeline.keyEvent(KeyEvent(time: t, keyCode: 0, isRelease: false, isModifier: false), now: t + 0.01)
+        updatePipeline()
+        return played
+    }
     #endif
 
     private var hasListenPermission: Bool {

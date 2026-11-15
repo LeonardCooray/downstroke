@@ -194,12 +194,13 @@ private struct PermissionBanner: View {
 }
 
 /// 16 rising bars lit by the last hit; the right half, past the threshold tick, means a slam.
-private struct HitMeter: View {
+struct HitMeter: View {
     static let height: CGFloat = 22
+    static let spacing: CGFloat = 3
     @ObservedObject var meter: MeterModel
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 3) {
+        HStack(alignment: .bottom, spacing: Self.spacing) {
             ForEach(0..<MeterModel.segments, id: \.self) { i in
                 RoundedRectangle(cornerRadius: 1.5)
                     .fill(Self.style(segment: i, lit: meter.lit))

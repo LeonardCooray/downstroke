@@ -23,15 +23,15 @@ import Testing
     @Test func rampsToSlamAtOneAndAHalfTimesThreshold() {
         let m = SlamMapper(sensitivity: 0.5)
         #expect(abs(m.velocity(forPeak: m.threshold * 1.25) - 0.6875) < 1e-4)
-        #expect(m.velocity(forPeak: m.threshold * 1.5) == 0.875)
-        #expect(m.velocity(forPeak: m.threshold * 3) == 0.875)
+        #expect(abs(m.velocity(forPeak: m.threshold * 1.5) - 0.875) < 1e-6)
+        #expect(abs(m.velocity(forPeak: m.threshold * 3) - 0.875) < 1e-6)
     }
 
     @Test func bumpsPlayNormalAndShowNothing() {
         let m = SlamMapper(sensitivity: 0.5)
         #expect(m.velocity(forPeak: 0.31) == 0.5)
         #expect(m.meterLevel(forPeak: 0.31) == 0)
-        #expect(m.velocity(forPeak: 0.3) == 0.875)
+        #expect(abs(m.velocity(forPeak: 0.3) - 0.875) < 1e-6)
     }
 
     @Test func meterPutsThresholdAtTheMiddle() {

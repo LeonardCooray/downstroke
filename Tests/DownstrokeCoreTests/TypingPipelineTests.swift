@@ -242,11 +242,14 @@ private struct Rig {
 
 @Test func turningSensingOffFlushesAndClearsPending() {
     let rig = Rig()
+    rig.ring.append(time: 1.0, impact: 0.05)
     rig.pipeline.keyEvent(press(at: 1.0), now: 1.0)
     #expect(rig.pipeline.hasPending)
     rig.pipeline.update(settings: sensing(), bank: sharedBank, sensorAvailable: false)
     #expect(!rig.pipeline.hasPending)
     #expect(rig.slots() == [.press(.medium), .press(.hard)])
+    #expect(rig.pipeline.slamCount == 0)
+    #expect(rig.pipeline.lastPress.level == 0)
 }
 
 @Test func exposesLatestSettings() {

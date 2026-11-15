@@ -100,7 +100,7 @@ Each board has several real recordings of ordinary keys (5 to 26, depending on t
 
 **The trade-off.** To catch a slam, Downstroke has to wait for the key to bottom out, so with the accent on every sound starts about 8 ms later. Turn it off in Settings › Sound and the sound starts as soon as the key event arrives.
 
-**No sensor, no dynamics.** On a desktop Mac, an Intel Mac, or with an external keyboard (which doesn't shake the laptop's case), there's nothing to measure. Downstroke plays every press at a fixed medium strength and says so in Settings › Diagnostics. It never fakes dynamics.
+**No sensor, no accent.** On a desktop Mac, an Intel Mac, or with an external keyboard (which doesn't shake the laptop's case), there's nothing to measure. Downstroke plays every press as a normal press and says so in Settings › Diagnostics. It never fakes a slam.
 
 ## Speed
 
@@ -127,25 +127,25 @@ banks: 20 loaded in 0.17 s, 32.4 MB of PCM
 engine: 48000 Hz, I/O buffer 128 frames (2.67 ms), render lead 3.65 ms (output host time minus render start)
 output device: safety offset 48 + latency 60 frames = 2.25 ms; lead minus buffer 0.99 ms
 render-cycle start = output host time minus the smallest render lead seen (3.41 ms)
-PASS latency p99, key event to render-cycle start, hit strength off 2.92 ms (budget 5.67 ms; p50 1.69 ms, max 2.92 ms, n=150)
-PASS latency p99, key event to render-cycle start, hit strength on 11.80 ms (budget 13.67 ms; p50 10.38 ms, max 12.11 ms, n=150)
-info key event to output time (what you hear, as the live readout), hit strength off: p99 6.33 ms, p50 5.10 ms, max 6.33 ms, n=150 (not checked)
-info key event to output time (what you hear, as the live readout), hit strength on: p99 15.21 ms, p50 13.79 ms, max 15.53 ms, n=150 (not checked)
+PASS latency p99, key event to render-cycle start, slam accent off 2.92 ms (budget 5.67 ms; p50 1.69 ms, max 2.92 ms, n=150)
+PASS latency p99, key event to render-cycle start, slam accent on 11.80 ms (budget 13.67 ms; p50 10.38 ms, max 12.11 ms, n=150)
+info key event to output time (what you hear, as the live readout), slam accent off: p99 6.33 ms, p50 5.10 ms, max 6.33 ms, n=150 (not checked)
+info key event to output time (what you hear, as the live readout), slam accent on: p99 15.21 ms, p50 13.79 ms, max 15.53 ms, n=150 (not checked)
 info stale triggers dropped: 0 (latency samples are key presses only, one per press)
-PASS first key after an idle pause, key event to render-cycle start (hit strength off, idled with stop() + prepare()) 34.82 ms (budget 50.00 ms; p50 32.88 ms, max 34.82 ms, n=12)
+PASS first key after an idle pause, key event to render-cycle start (slam accent off, idled with stop() + prepare()) 34.82 ms (budget 50.00 ms; p50 32.88 ms, max 34.82 ms, n=12)
 info first key after an idle pause, key event to output time, stop() + prepare(): p99 38.23 ms, p50 36.29 ms, max 38.23 ms, n=12 (not checked)
 info first key after an idle pause, engine start() call, stop() + prepare(): p99 33.38 ms, p50 31.53 ms, max 33.38 ms, n=12 (not checked)
 info first key after an idle pause, key event to render-cycle start, pause() instead: p99 35.77 ms, p50 33.89 ms, max 35.77 ms, n=12 (not checked)
 info first key after an idle pause, key event to output time, pause() instead: p99 39.18 ms, p50 37.30 ms, max 39.18 ms, n=12 (not checked)
 info first key after an idle pause, engine start() call, pause() instead: p99 35.20 ms, p50 32.63 ms, max 35.20 ms, n=12 (not checked)
 info idle pauses and wakes: 12 with stop() + prepare(), 12 with pause(); stale triggers dropped now 0
-PASS idle CPU, engine running (hit strength off) 0.47% of a core (budget 1.0%)
+PASS idle CPU, engine running (slam accent off) 0.47% of a core (budget 1.0%)
 info idle CPU, engine + synthetic 800 Hz sensor: 0.92% of a core (not checked)
-PASS idle CPU, engine + real sensor (794 Hz), engine idle-paused (stop() + prepare()) after 1 s, hit-strength-on idle budget 0.98% of a core (budget 1.5%)
+PASS idle CPU, engine + real sensor (794 Hz), engine idle-paused (stop() + prepare()) after 1 s, slam-accent-on idle budget 0.98% of a core (budget 1.5%)
 info idle CPU, engine running + real sensor: 1.41% of a core (not checked; before the idle pause)
 info idle CPU, real sensor, engine idled with pause() instead: 0.96% of a core (not checked)
-PASS typing CPU, hit strength off 0.63% of a core (budget 3.0%)
-PASS typing CPU, hit strength on (synthetic sensor) 1.46% of a core (budget 3.0%)
+PASS typing CPU, slam accent off 0.63% of a core (budget 3.0%)
+PASS typing CPU, slam accent on (synthetic sensor) 1.46% of a core (budget 3.0%)
 PASS phys_footprint 55.8 MB with 20 of 20 banks loaded (budget 100 MB, all banks)
 PASS render overruns 0 in 30906 renders (worst 0.021 ms, limit 1.333 ms)
 PASS
@@ -153,9 +153,9 @@ PASS
 
 </details>
 
-Read it like this: with hit strength off the p99 latency is 2.92 ms to the start of the render cycle that plays the key, and about 6.3 ms to the output time (what you hear). With it on, the 8 ms measurement window brings that to 11.80 ms (15.2 ms at the output). Latency samples count each key press once; key releases aren't measured. Nothing overran in 30,906 renders.
+Read it like this: with the slam accent off the p99 latency is 2.92 ms to the start of the render cycle that plays the key, and about 6.3 ms to the output time (what you hear). With it on, the 8 ms measurement window brings that to 11.80 ms (15.2 ms at the output). Latency samples count each key press once; key releases aren't measured. Nothing overran in 30,906 renders.
 
-Pausing the engine when idle is what brings hit strength on inside its budget. With the real sensor streaming, idle CPU is 1.41% while the engine runs and 0.98% once it has paused, which is about the sensor's own cost. The price is the first key after a pause: 34.82 ms p99 to the render cycle (38.2 ms at the output), almost all of it the output device restarting. A slower restart (Bluetooth, say) makes that key later but doesn't drop it: the key that wakes the engine, and any after it, are exempt from the mixer's 0.25 s stale-trigger guard. The engine idles with `stop()` and stays prepared; the bench also measures `pause()`, which costs the same idle CPU and resumes no faster.
+Pausing the engine when idle is what brings the slam accent inside its idle budget. With the real sensor streaming, idle CPU is 1.41% while the engine runs and 0.98% once it has paused, which is about the sensor's own cost. The price is the first key after a pause: 34.82 ms p99 to the render cycle (38.2 ms at the output), almost all of it the output device restarting. A slower restart (Bluetooth, say) makes that key later but doesn't drop it: the key that wakes the engine, and any after it, are exempt from the mixer's 0.25 s stale-trigger guard. The engine idles with `stop()` and stays prepared; the bench also measures `pause()`, which costs the same idle CPU and resumes no faster.
 
 ## Privacy
 

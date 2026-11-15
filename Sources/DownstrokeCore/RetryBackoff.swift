@@ -2,15 +2,17 @@
 public struct RetryBackoff: Sendable {
     public let initial: Double
     public let cap: Double
-    /// Failures of the latest kind since the last reset.
-    public private(set) var failures = 0
     private var nextAttempt = -Double.infinity
     private var counts: [Int: Int] = [:]
+    private var lastKind = 0
 
     public init(initial: Double, cap: Double) {
         self.initial = initial
         self.cap = cap
     }
+
+    /// Failures of the latest kind since the last reset.
+    public var failures: Int { counts[lastKind, default: 0] }
 
     /// Wait after the latest failure; 0 before any.
     public var delay: Double {
@@ -27,14 +29,13 @@ public struct RetryBackoff: Sendable {
     /// `limit`: stop once this many failures of `kind` have come since the last reset.
     public mutating func failed(now: Double, kind: Int = 0, limit: Int? = nil) {
         guard !isStopped else { return }
-        failures = counts[kind, default: 0] + 1
-        counts[kind] = failures
+        lastKind = kind
+        counts[kind, default: 0] += 1
         nextAttempt = now + delay
         if let limit, failures >= limit { stop() }
     }
 
     public mutating func reset() {
-        failures = 0
         counts = [:]
         nextAttempt = -.infinity
     }

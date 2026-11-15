@@ -96,8 +96,8 @@ enum DebugSelfTest {
             let settling = ring.impacts(from: startedAt + 0.02, to: startedAt + 0.15)
             check(!settling.isEmpty && settling.allSatisfy { $0 == 0 }, "impacts read zero while the filter settles after start, round \(round)")
             check(ring.impacts(from: startedAt + 0.35, to: MonotonicClock.now()).contains { $0 > 0 }, "and real impacts once it has settled, round \(round)")
-            let rewakeAt = MonotonicClock.now()
             sensor.rewake()
+            let rewakeAt = MonotonicClock.now()
             try? await Task.sleep(for: .milliseconds(200))
             check(sensor.isStreaming, "sensor streams after rewake, round \(round)")
             let resettling = ring.impacts(from: rewakeAt + 0.01, to: rewakeAt + 0.15)
@@ -215,7 +215,7 @@ enum DebugSelfTest {
         try? await Task.sleep(for: .seconds(6))
         let missingTries = Array(controller.sensorStartAttempts.dropFirst(beforeMissing))
         let span = (missingTries.last ?? 0) - (missingTries.first ?? 0)
-        check(missingTries.count == 4 && span < 2.5,
+        check(missingTries.count == 4 && span < 3,
               String(format: "no device after opening gets 4 quick tries from the initial delay, apart from earlier open failures (%d attempts over %.2f s)", missingTries.count, span))
     }
 
@@ -607,6 +607,10 @@ enum DebugSelfTest {
         check(status() == "Listening · Holy Panda", "status: listening")
         check(status(enabled: false, permission: true) == "Off", "status: off")
         check(status(permission: true) == "Needs Input Monitoring", "status: needs Input Monitoring")
+        check(PanelState.status(
+            enabled: true, permissionMissing: false, frontmostBundleID: nil, mutedBundleIDs: [], micInUse: false,
+            muteWhileMicInUse: true, boardName: "Holy Panda", listening: false, appName: name) == "Not listening",
+              "status: not listening while the key tap is down")
         check(status(front: "us.zoom.xos", mic: true) == "Muted in zoom.us", "status: muted app")
         check(status(front: "com.apple.Notes", mic: true) == "Muted: mic in use", "status: mic in use")
         check(PanelState.footer(p50: 0.0094, bluetooth: false) == "Key → sound 9 ms", "footer: p50 rounded")

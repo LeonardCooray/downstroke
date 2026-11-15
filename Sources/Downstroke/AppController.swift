@@ -74,6 +74,13 @@ final class PendingTicker: @unchecked Sendable {
     }
 }
 
+/// Sensor start failures the backoff counts apart, with how many tries each gets.
+private enum SensorFailure: Int {
+    case openFailed, missing
+
+    var tries: Int { self == .missing ? 4 : 10 }
+}
+
 /// Owns the tap, sensor, pipeline, mixer and engine, and publishes their state for the UI.
 @MainActor
 final class AppController: ObservableObject {
@@ -357,8 +364,8 @@ final class AppController: ObservableObject {
             let status = SensorStatus.unavailable("\(error)")
             if status != sensorStatus { sensorStatus = status }
             // A few quick tries cover a sensor still enumerating after wake; about 4 min covers another app's hold.
-            let missing = (error as? MotionSensorError)?.isMissing ?? false
-            sensorRetry.failed(now: MonotonicClock.now(), kind: missing ? 1 : 0, limit: missing ? 4 : 10)
+            let failure: SensorFailure = (error as? MotionSensorError)?.isMissing == true ? .missing : .openFailed
+            sensorRetry.failed(now: MonotonicClock.now(), kind: failure.rawValue, limit: failure.tries)
         }
     }
 
